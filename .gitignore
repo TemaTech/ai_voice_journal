@@ -41,3 +41,7 @@ app-example
 # generated native folders
 /ios
 /android
+.env
+ChatGPTの音声会話技術.txt
+DEVELOPMENT_GUIDE.md
+再設計案.txt
