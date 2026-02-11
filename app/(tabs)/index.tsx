@@ -3,69 +3,44 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Link, Stack, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Alert, ScrollView, TouchableOpacity, View } from 'react-native';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ZenHeading, ZenText } from '../../components/ui/Typography';
+import { useTheme } from '../../hooks/useTheme';
 import { getGeminiRestService } from '../../services/gemini-rest';
 import { RecoveryService } from '../../services/recovery';
 import { JournalEntry, StorageService, UserSettings } from '../../services/storage';
+import { calculateStreak } from '../../utils/date';
 
 // Helper to calculate streak
-const calculateStreak = (entries: JournalEntry[]): number => {
-  if (entries.length === 0) return 0;
 
-  // Get unique dates sorted descending
-  const uniqueDates = Array.from(new Set(entries.map(e => e.date))).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
-  
-  if (uniqueDates.length === 0) return 0;
-
-  let streak = 0;
-  const today = new Date();
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  
-  // Check if the most recent entry is today or yesterday
-  const lastEntryDate = new Date(uniqueDates[0]);
-  const diffTime = Math.abs(today.getTime() - lastEntryDate.getTime());
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-  
-  // If last entry is older than yesterday (> 1 day gap), streak is 0 (unless it's today, diff is 0 or 1 depending on time, but simplified check: strictly date usage)
-  // Let's use simple string logic for robust dates
-  
-  let currentDate = new Date();
-  let checkStr = todayStr;
-  
-  // If today has no entry, check check yesterday first to see if streak is alive
-  if (uniqueDates[0] !== checkStr) {
-     const yesterday = new Date();
-     yesterday.setDate(yesterday.getDate() - 1);
-     const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
-     
-     if (uniqueDates[0] !== yesterdayStr) {
-         return 0; // Streak broken
-     }
-     checkStr = yesterdayStr;
-  }
-
-  // Count backwards
-  for (const dateStr of uniqueDates) {
-      if (dateStr === checkStr) {
-          streak++;
-          // Move checkStr back one day
-          const d = new Date(checkStr);
-          d.setDate(d.getDate() - 1);
-          checkStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      } else {
-          break;
-      }
-  }
-
-  return streak;
-};
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { isDark } = useTheme();
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [latestEntry, setLatestEntry] = useState<JournalEntry | null>(null);
   const [entries, setEntries] = useState<JournalEntry[]>([]);
+  
+  // Animation for Streak
+  const scale = useSharedValue(1);
+
+  useFocusEffect(
+    useCallback(() => {
+        scale.value = withRepeat(
+            withSequence(
+                withTiming(1.2, { duration: 500, easing: Easing.inOut(Easing.ease) }),
+                withTiming(1, { duration: 500, easing: Easing.inOut(Easing.ease) })
+            ),
+            -1,
+            true
+        );
+    }, [])
+  );
+
+  const animatedStyle = useAnimatedStyle(() => ({
+      transform: [{ scale: scale.value }],
+  }));
 
   // Date Logic
   const today = new Date();
@@ -84,6 +59,13 @@ export default function HomeScreen() {
     const journalEntries = await StorageService.getJournalEntries();
     setSettings(userSettings);
     setEntries(journalEntries);
+    
+    // Onboarding Check
+    if (!userSettings.isOnboarded) {
+      router.replace('/talk?mode=onboarding');
+      return;
+    }
+
     if (journalEntries.length > 0) {
       setLatestEntry(journalEntries[0]);
     }
@@ -145,11 +127,11 @@ export default function HomeScreen() {
   };
 
   return (
-    <View className="flex-1 bg-zen-bg">
+    <View className="flex-1" style={{ backgroundColor: isDark ? '#1C1C1E' : '#F2F2F7' }}>
        <Stack.Screen options={{ headerShown: false }} />
        {/* Background Gradient */}
        <LinearGradient
-        colors={['#F9FAFB', '#F3F4F6', '#EBEBF0']}
+        colors={isDark ? ['#1C1C1E', '#2C2C2E', '#1C1C1E'] : ['#F9FAFB', '#F3F4F6', '#EBEBF0']}
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
       
@@ -162,21 +144,27 @@ export default function HomeScreen() {
           {/* Header */}
           <View className="px-6 pt-6 pb-2 flex-row justify-between items-center">
              <View>
-               <ZenText className="text-slate-500 text-xs font-bold mb-1">おかえりなさい</ZenText>
-               <ZenHeading level={1} className="text-slate-800 text-2xl font-bold">
+               <ZenText className="text-xs font-bold mb-1" style={{ color: isDark ? '#94A3B8' : '#64748B' }}>おかえりなさい</ZenText>
+               <ZenHeading level={1} className="text-2xl font-bold" style={{ color: isDark ? '#FFFFFF' : '#1E293B' }}>
                   {settings?.userName || 'ゲスト'} さん
                </ZenHeading>
              </View>
              {/* Streak Badge */}
-             <View className="bg-white px-4 py-2 rounded-full border border-slate-200 flex-row items-center gap-2 shadow-sm">
-                <ZenText className="text-orange-500 text-lg">🔥</ZenText>
-                <ZenText className="text-slate-700 font-bold">{calculateStreak(entries)}日連続</ZenText>
+             <View className="px-4 py-2 rounded-full border flex-row items-center gap-2 shadow-sm" style={{ 
+                 backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                 borderColor: isDark ? '#334155' : '#E2E8F0'
+             }}>
+                <Animated.Text style={animatedStyle} className="text-lg">🔥</Animated.Text>
+                <ZenText className="font-bold" style={{ color: isDark ? '#E2E8F0' : '#334155' }}>{calculateStreak(entries)}日連続</ZenText>
              </View>
           </View>
 
           {/* Progress Circle Section */}
           <View className="items-center justify-center my-8">
-             <View className="w-48 h-48 rounded-full border-[12px] border-slate-200 justify-center items-center relative shadow-inner bg-white/50">
+             <View className="w-48 h-48 rounded-full border-[12px] justify-center items-center relative shadow-inner" style={{
+                 borderColor: isDark ? '#334155' : '#E2E8F0',
+                 backgroundColor: isDark ? 'rgba(30, 41, 59, 0.5)' : 'rgba(255, 255, 255, 0.5)'
+             }}>
                  {/* Progress Arc */}
                  {(() => {
                     const percentage = Math.min(100, Math.round((entries.filter(e => {
@@ -198,14 +186,14 @@ export default function HomeScreen() {
                  })()}
                  
                  <View className="items-center">
-                    <ZenHeading level={1} className="text-slate-800 text-5xl font-bold mb-1">
+                    <ZenHeading level={1} className="text-5xl font-bold mb-1" style={{ color: isDark ? '#FFFFFF' : '#1E293B' }}>
                       {Math.min(100, Math.round((entries.filter(e => {
                         const d = new Date(e.date);
                         const now = new Date();
                         return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
                       }).length / 1) * 100))}%
                     </ZenHeading>
-                    <ZenText className="text-slate-400 text-sm font-medium">今日の目標</ZenText>
+                    <ZenText className="text-sm font-medium" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>今日の目標</ZenText>
                  </View>
              </View>
              <ZenText className="text-slate-500 mt-4 font-medium">10分中 6分 完了 (Coming Soon)</ZenText>
@@ -263,7 +251,10 @@ export default function HomeScreen() {
              </View>
 
              {/* Dynamic Highlight Card */}
-             <View className="bg-white rounded-3xl p-5 border border-indigo-50 shadow-sm mb-4">
+             <View className="rounded-3xl p-5 border shadow-sm mb-4" style={{
+                 backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                 borderColor: isDark ? '#334155' : '#EEF2FF'
+             }}>
                 {entries.length > 0 ? (
                   (() => {
                     // Pick a random entry or the latest one for now
@@ -273,16 +264,19 @@ export default function HomeScreen() {
                     return (
                         <>
                            <View className="flex-row items-center gap-2 mb-2">
-                              <View className="bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
-                                <ZenText className="text-indigo-500 text-[10px] font-bold">
+                              <View className="px-3 py-1 rounded-full border" style={{ 
+                                  backgroundColor: isDark ? 'rgba(79, 70, 229, 0.2)' : '#EEF2FF', 
+                                  borderColor: isDark ? 'rgba(99, 102, 241, 0.3)' : '#E0E7FF' 
+                              }}>
+                                <ZenText className="text-[10px] font-bold" style={{ color: isDark ? '#A5B4FC' : '#6366F1' }}>
                                     {new Date(highlightEntry.date).toLocaleDateString('ja-JP')} の記録
                                 </ZenText>
                               </View>
                            </View>
-                           <ZenHeading level={3} className="text-slate-800 text-lg font-bold mb-2">
+                           <ZenHeading level={3} className="text-lg font-bold mb-2" style={{ color: isDark ? '#FFFFFF' : '#1E293B' }}>
                              {highlightEntry.title}
                            </ZenHeading>
-                           <ZenText className="text-slate-500 text-sm leading-relaxed mb-4" numberOfLines={3}>
+                           <ZenText className="text-sm leading-relaxed mb-4" style={{ color: isDark ? '#CBD5E1' : '#64748B' }} numberOfLines={3}>
                              {highlightEntry.summary}
                            </ZenText>
                            
@@ -296,18 +290,21 @@ export default function HomeScreen() {
                   })()
                 ) : (
                     <View className="py-4 items-center">
-                        <ZenText className="text-slate-400 text-center">まだ会話の記録がありません。</ZenText>
-                        <ZenText className="text-slate-400 text-xs text-center mt-1">AIと話して思い出を作りましょう。</ZenText>
+                        <ZenText className="text-center" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>まだ会話の記録がありません。</ZenText>
+                        <ZenText className="text-xs text-center mt-1" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>AIと話して思い出を作りましょう。</ZenText>
                     </View>
                 )}
              </View>
 
              {/* Weekly Goals (Simplified matches light theme) */}
-             <View className="bg-white rounded-3xl p-5 border border-slate-100 shadow-sm">
+             <View className="rounded-3xl p-5 border shadow-sm" style={{
+                 backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                 borderColor: isDark ? '#334155' : '#EEF2FF'
+             }}>
                 <View className="flex-row justify-between items-start mb-4">
                    <View>
-                      <ZenHeading level={3} className="text-slate-700 text-base font-bold">今週の目標</ZenHeading>
-                      <ZenText className="text-slate-400 text-xs">7日中 {
+                      <ZenHeading level={3} className="text-base font-bold" style={{ color: isDark ? '#FFFFFF' : '#334155' }}>今週の目標</ZenHeading>
+                      <ZenText className="text-xs" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>7日中 {
                         (() => {
                           const now = new Date();
                           const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
@@ -331,8 +328,12 @@ export default function HomeScreen() {
                          const isFuture = checkDate > now;
 
                          return (
-                           <View key={day} className={`w-6 h-6 rounded-full items-center justify-center ${isTalked ? 'bg-indigo-500' : (isFuture ? 'bg-slate-100' : 'bg-slate-200')}`}>
-                              <ZenText className={`text-[10px] font-bold ${isTalked ? 'text-white' : 'text-slate-400'}`}>{day}</ZenText>
+                           <View key={day} className={`w-6 h-6 rounded-full items-center justify-center ${isTalked ? 'bg-indigo-500' : ''}`} style={
+                               !isTalked ? { backgroundColor: isFuture ? (isDark ? '#334155' : '#F1F5F9') : (isDark ? '#475569' : '#E2E8F0') } : undefined
+                           }>
+                              <ZenText className={`text-[10px] font-bold ${isTalked ? 'text-white' : ''}`} style={
+                                  !isTalked ? { color: isDark ? '#94A3B8' : '#94A3B8' } : undefined
+                              }>{day}</ZenText>
                            </View>
                          );
                       })}
@@ -340,7 +341,7 @@ export default function HomeScreen() {
                 </View>
                 
                 {/* Progress Bar */}
-                <View className="h-3 bg-slate-100 rounded-full overflow-hidden w-full">
+                <View className="h-3 rounded-full overflow-hidden w-full" style={{ backgroundColor: isDark ? '#334155' : '#F1F5F9' }}>
                    <View className="h-full bg-indigo-500 rounded-full" style={{ width: `${Math.min(100, (
                         (() => {
                           const now = new Date();

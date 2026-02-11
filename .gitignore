@@ -42,8 +42,11 @@ app-example
 /ios
 /android
 .env
-ChatGPTの音声会話技術.txt
-DEVELOPMENT_GUIDE.md
-再設計案.txt
 movie/
+再設計案.txt
 FEATURE_IDEAS.md
+開発ガイド.md
+音声会話技術_ChatGPT.txt
+要件定義_v1.md
+要件定義_v2.md
+実装候補機能.md

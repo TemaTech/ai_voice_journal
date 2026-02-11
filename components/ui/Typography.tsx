@@ -1,3 +1,4 @@
+import { useColorScheme } from 'nativewind';
 import { Text, TextProps } from 'react-native';
 
 type ZenTextProps = TextProps & {
@@ -6,17 +7,25 @@ type ZenTextProps = TextProps & {
 };
 
 export function ZenText({ className, variant = 'body', style, ...props }: ZenTextProps) {
-  const baseStyle = "font-zen text-text-primary dark:text-slate-100";
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === 'dark';
+
+  const baseStyle = "font-zen text-text-primary";
   const variants = {
     body: "text-base leading-relaxed",
-    caption: "text-sm text-slate-500 dark:text-slate-400",
-    label: "text-xs font-semibold tracking-wider text-slate-400 uppercase",
+    caption: "text-sm",
+    label: "text-xs font-semibold tracking-wider uppercase",
   };
+
+  // ダークモード用のテキスト色をインラインスタイルで適用
+  const darkTextColor = variant === 'caption' || variant === 'label'
+    ? (isDark ? '#94A3B8' : undefined) // slate-400
+    : (isDark ? '#F1F5F9' : undefined); // slate-100
 
   return (
     <Text 
       className={`${baseStyle} ${variants[variant]} ${className || ''}`} 
-      style={style}
+      style={[darkTextColor ? { color: darkTextColor } : undefined, style]}
       {...props} 
     />
   );
@@ -28,7 +37,10 @@ type ZenHeadingProps = TextProps & {
 };
 
 export function ZenHeading({ className, level = 1, style, ...props }: ZenHeadingProps) {
-  const baseStyle = "font-zen font-bold text-text-primary dark:text-white";
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === 'dark';
+
+  const baseStyle = "font-zen font-bold text-text-primary";
   const sizes = {
     1: "text-3xl tracking-tight",
     2: "text-xl tracking-tight",
@@ -38,8 +50,9 @@ export function ZenHeading({ className, level = 1, style, ...props }: ZenHeading
   return (
     <Text 
       className={`${baseStyle} ${sizes[level]} ${className || ''}`} 
-      style={style}
+      style={[isDark ? { color: '#FFFFFF' } : undefined, style]}
       {...props} 
     />
   );
 }
+

@@ -1,11 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
-import { Alert, LayoutAnimation, ScrollView, TouchableOpacity, View } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { Alert, LayoutAnimation, ScrollView, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { JournalEditorModal } from '../../components/JournalEditorModal';
+import { MoodChart } from '../../components/ui/MoodChart';
 import { ZenHeading, ZenText } from '../../components/ui/Typography';
+import { useTheme } from '../../hooks/useTheme';
 import { JournalEntry, StorageService } from '../../services/storage';
 
 const EMOTION_COLORS: Record<string, string> = {
@@ -36,15 +38,30 @@ const EMOTION_ICONS: Record<string, string> = {
 };
 
 export default function HistoryScreen() {
-  const [sections, setSections] = useState<{ title: string; data: JournalEntry[] }[]>([]);
+  const { isDark } = useTheme();
+  const [allEntries, setAllEntries] = useState<JournalEntry[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingEntry, setEditingEntry] = useState<JournalEntry | null>(null);
 
   const loadData = async () => {
-    const allEntries = await StorageService.getJournalEntries();
+    const entries = await StorageService.getJournalEntries();
     // Sort by createdAt descending (newest first)
-    allEntries.sort((a, b) => b.createdAt - a.createdAt);
+    entries.sort((a, b) => b.createdAt - a.createdAt);
+    setAllEntries(entries);
+  };
 
+  const filteredEntries = useMemo(() => {
+    if (!searchQuery.trim()) return allEntries;
+    const lower = searchQuery.toLowerCase();
+    return allEntries.filter(e => 
+      e.title.toLowerCase().includes(lower) ||
+      e.summary.toLowerCase().includes(lower) ||
+      (EMOTION_LABELS[e.emotion] || '').toLowerCase().includes(lower)
+    );
+  }, [allEntries, searchQuery]);
+
+  const sections = useMemo(() => {
     const grouped: Record<string, JournalEntry[]> = {};
     const today = new Date();
     const yesterday = new Date();
@@ -52,11 +69,9 @@ export default function HistoryScreen() {
 
     const todayStr = today.toDateString();
     const yesterdayStr = yesterday.toDateString();
-
-    // Helper to format date key for checking equality
     const dateKey = (d: Date) => d.toDateString();
 
-    allEntries.forEach(entry => {
+    filteredEntries.forEach(entry => {
       const date = new Date(entry.createdAt);
       const entryDateStr = dateKey(date);
       
@@ -72,18 +87,13 @@ export default function HistoryScreen() {
       grouped[title].push(entry);
     });
 
-    // Ensure order: Today, Yesterday, then sorted dates descending
     const result = [];
     if (grouped['今日']) result.push({ title: '今日', data: grouped['今日'] });
     if (grouped['昨日']) result.push({ title: '昨日', data: grouped['昨日'] });
     
-    // Sort other keys descending by date
     Object.keys(grouped)
         .filter(key => key !== '今日' && key !== '昨日')
         .sort((a, b) => {
-            // Parse "YYYY年MM月DD日" back to compare, or just rely on the fact that we processed sorted entries...
-            // Wait, object keys iteration order is not guaranteed to be insertion order in all environments, though usually is for string keys.
-            // Safer to sort.
             const parseDate = (s: string) => {
                 const parts = s.match(/(\d+)年(\d+)月(\d+)日/);
                 if (!parts) return 0;
@@ -92,9 +102,8 @@ export default function HistoryScreen() {
             return parseDate(b) - parseDate(a);
         })
         .forEach(key => result.push({ title: key, data: grouped[key] }));
-
-    setSections(result);
-  };
+    return result;
+  }, [filteredEntries]);
 
   useFocusEffect(
     useCallback(() => {
@@ -141,32 +150,59 @@ export default function HistoryScreen() {
   };
 
   return (
-    <View className="flex-1 bg-zen-bg">
+    <View className="flex-1" style={{ backgroundColor: isDark ? '#1C1C1E' : '#F2F2F7' }}>
       <LinearGradient
-        colors={['#F9FAFB', '#F3F4F6', '#EBEBF0']}
+        colors={isDark ? ['#1C1C1E', '#2C2C2E', '#1C1C1E'] : ['#F9FAFB', '#F3F4F6', '#EBEBF0']}
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
       
       <SafeAreaView className="flex-1">
-        <View className="px-6 py-4 flex-row items-center justify-between">
-          <ZenHeading level={1} className="text-2xl text-slate-800">会話の履歴</ZenHeading>
+        <View className="px-6 py-4 flex-col gap-4">
+             <ZenHeading level={1} className="text-2xl font-bold" style={{ color: isDark ? '#FFFFFF' : '#1E293B' }}>会話の履歴</ZenHeading>
+             
+             {/* Search Bar */}
+             <View className="flex-row items-center rounded-xl px-4 py-2 border" style={{ 
+                 backgroundColor: isDark ? '#334155' : '#FFFFFF',
+                 borderColor: isDark ? '#475569' : '#E2E8F0'
+             }}>
+                <Ionicons name="search" size={20} color={isDark ? "#94A3B8" : "#64748B"} />
+                <TextInput
+                    className="flex-1 ml-2 text-base"
+                    style={{ color: isDark ? '#FFFFFF' : '#1E293B' }}
+                    placeholder="検索（会話、気分など）"
+                    placeholderTextColor={isDark ? "#94A3B8" : "#64748B"}
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                />
+                {searchQuery.length > 0 && (
+                    <TouchableOpacity onPress={() => setSearchQuery('')}>
+                        <Ionicons name="close-circle" size={18} color={isDark ? "#94A3B8" : "#64748B"} />
+                    </TouchableOpacity>
+                )}
+            </View>
         </View>
 
         {/* Categories (Visual only for now) */}
-        <View className="px-6 flex-row gap-6 mb-4 border-b border-slate-200 pb-2">
+        <View className="px-6 flex-row gap-6 mb-4 pb-2" style={{ borderBottomWidth: 1, borderBottomColor: isDark ? '#334155' : '#E2E8F0' }}>
             <TouchableOpacity><ZenText className="text-indigo-600 font-bold border-b-2 border-indigo-600 pb-1">すべて</ZenText></TouchableOpacity>
             <TouchableOpacity><ZenText className="text-slate-400 font-medium">ムード</ZenText></TouchableOpacity>
             <TouchableOpacity><ZenText className="text-slate-400 font-medium">お気に入り</ZenText></TouchableOpacity>
         </View>
 
         <ScrollView className="flex-1 px-6" contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+          
+          {/* Mood Chart - Only show when not searching */}
+          {allEntries.length > 0 && searchQuery.length === 0 && (
+            <MoodChart entries={allEntries} />
+          )}
+
           {sections.map((section) => (
             <View key={section.title} className="mb-6">
               <ZenHeading level={3} className="text-slate-500 font-bold mb-3 uppercase text-xs tracking-wider">
                 {section.title}
               </ZenHeading>
               
-              <View className="relative border-l-2 border-slate-200 ml-4 pl-6 space-y-6">
+              <View className="relative ml-4 pl-6 space-y-6" style={{ borderLeftWidth: 2, borderLeftColor: isDark ? '#334155' : '#E2E8F0' }}>
                 {section.data.map((entry) => {
                    const isExpanded = expandedId === entry.id;
                    const color = EMOTION_COLORS[entry.emotion] || '#9CA3AF';
@@ -174,8 +210,11 @@ export default function HistoryScreen() {
                    return (
                      <View key={entry.id} className="relative">
                         {/* Timeline Dot */}
-                        <View className="absolute -left-[31px] top-6 bg-slate-100 p-1.5 rounded-full border border-slate-200">
-                            <Ionicons name="mic" size={12} color="#64748B" />
+                        <View className="absolute -left-[31px] top-6 p-1.5 rounded-full border" style={{ 
+                            backgroundColor: isDark ? '#334155' : '#F1F5F9',
+                            borderColor: isDark ? '#475569' : '#E2E8F0'
+                        }}>
+                            <Ionicons name="mic" size={12} color={isDark ? "#94A3B8" : "#64748B"} />
                         </View>
 
                         {/* Time Label */}
@@ -188,7 +227,11 @@ export default function HistoryScreen() {
                         <TouchableOpacity 
                           onPress={() => toggleExpand(entry.id)}
                           activeOpacity={0.9}
-                          className="bg-white rounded-2xl p-5 shadow-sm border border-slate-100 overflow-hidden"
+                          className="rounded-2xl p-5 shadow-sm border overflow-hidden"
+                          style={{
+                              backgroundColor: isDark ? 'rgba(30,41,59,0.5)' : '#FFFFFF',
+                              borderColor: isDark ? 'rgba(255,255,255,0.1)' : '#F1F5F9'
+                          }}
                         >
                             <View className="flex-row justify-between items-start mb-2">
                                 <View className="flex-row items-center gap-2">
@@ -199,14 +242,15 @@ export default function HistoryScreen() {
                                 </View>
                             </View>
 
-                            <ZenText className="text-lg font-bold text-slate-800 mb-1">{entry.title}</ZenText>
+                            <ZenText className="text-lg font-bold mb-1" style={{ color: isDark ? '#FFFFFF' : '#1E293B' }}>{entry.title}</ZenText>
                             
 
 
                             {/* Summary Content */}
                             <View>
                                 <ZenText 
-                                    className="text-slate-600 leading-relaxed italic"
+                                    className="leading-relaxed italic"
+                                    style={{ color: isDark ? '#CBD5E1' : '#475569' }}
                                     numberOfLines={isExpanded ? undefined : 2}
                                 >
                                     {entry.summary}
@@ -216,20 +260,20 @@ export default function HistoryScreen() {
                             {/* Actions and Expand Button */}
                             <View className="flex-row justify-between items-center mt-4 pt-2">
                                 {/* Expand Toggle */}
-                                <View className="flex-row items-center bg-slate-50 px-3 py-1.5 rounded-lg">
-                                    <ZenText className="text-slate-500 text-xs font-medium mr-1">
+                                <View className="flex-row items-center px-3 py-1.5 rounded-lg" style={{ backgroundColor: isDark ? '#334155' : '#F8FAFC' }}>
+                                    <ZenText className="text-xs font-medium mr-1" style={{ color: isDark ? '#94A3B8' : '#64748B' }}>
                                         {isExpanded ? '閉じる' : '詳細を見る'}
                                     </ZenText>
-                                    <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={14} color="#64748B" />
+                                    <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={14} color={isDark ? "#94A3B8" : "#64748B"} />
                                 </View>
 
                                 {/* Edit/Delete Actions (Only visible when expanded) */}
                                 {isExpanded && (
                                     <View className="flex-row gap-3">
-                                        <TouchableOpacity onPress={() => setEditingEntry(entry)} className="p-2 bg-slate-50 rounded-full">
-                                            <Ionicons name="create-outline" size={18} color="#64748B" />
+                                        <TouchableOpacity onPress={() => setEditingEntry(entry)} className="p-2 rounded-full" style={{ backgroundColor: isDark ? '#334155' : '#F8FAFC' }}>
+                                            <Ionicons name="create-outline" size={18} color={isDark ? "#CBD5E1" : "#64748B"} />
                                         </TouchableOpacity>
-                                        <TouchableOpacity onPress={() => handleDelete(entry)} className="p-2 bg-red-50 rounded-full">
+                                        <TouchableOpacity onPress={() => handleDelete(entry)} className="p-2 rounded-full" style={{ backgroundColor: isDark ? 'rgba(127, 29, 29, 0.3)' : '#FEF2F2' }}>
                                             <Ionicons name="trash-outline" size={18} color="#EF4444" />
                                         </TouchableOpacity>
                                     </View>

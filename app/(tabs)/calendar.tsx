@@ -5,6 +5,7 @@ import { useCallback, useState } from 'react';
 import { Dimensions, ScrollView, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ZenHeading, ZenText } from '../../components/ui/Typography';
+import { useTheme } from '../../hooks/useTheme';
 import { JournalEntry, StorageService } from '../../services/storage';
 
 // Helper: Get days for the grid
@@ -39,6 +40,7 @@ const EMOTION_COLORS: Record<string, string> = {
 };
 
 export default function InsightsScreen() {
+  const { isDark } = useTheme();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [entriesMap, setEntriesMap] = useState<Record<string, JournalEntry[]>>({});
   const [stats, setStats] = useState({
@@ -127,22 +129,22 @@ export default function InsightsScreen() {
   };
 
   return (
-    <View className="flex-1 bg-zen-bg">
+    <View style={{ flex: 1, backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }}>
       <LinearGradient
-        colors={['#F9FAFB', '#F3F4F6', '#EBEBF0']}
+        colors={isDark ? ['#1C1C1E', '#2C2C2E', '#1C1C1E'] : ['#F9FAFB', '#F3F4F6', '#EBEBF0']}
         style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}
       />
       
       <SafeAreaView className="flex-1">
         <View className="px-6 pt-4 pb-2 flex-row items-center justify-between">
            <TouchableOpacity onPress={() => {}} className="p-2">
-             <Ionicons name="chevron-back" size={24} color="#64748B" />
+             <Ionicons name="chevron-back" size={24} color={isDark ? "#FFFFFF" : "#64748B"} />
            </TouchableOpacity>
-           <ZenHeading level={2} className="text-xl text-slate-800 font-bold">
+           <ZenHeading level={2} className="text-xl font-bold" style={{ color: isDark ? '#FFFFFF' : '#1E293B' }}>
                {year}年 {month + 1}月
            </ZenHeading>
            <TouchableOpacity onPress={() => {}} className="p-2">
-             <Ionicons name="ellipsis-horizontal" size={24} color="#64748B" />
+             <Ionicons name="ellipsis-horizontal" size={24} color={isDark ? "#FFFFFF" : "#64748B"} />
            </TouchableOpacity>
         </View>
 
@@ -151,15 +153,15 @@ export default function InsightsScreen() {
           {/* Calendar Section */}
           <View className="mt-4 px-4">
               <View className="flex-row items-center justify-between px-4 mb-4">
-                 <TouchableOpacity onPress={prevMonth}><Ionicons name="chevron-back" size={20} color="#94A3B8" /></TouchableOpacity>
-                 <ZenText className="text-slate-400 font-bold">月間カレンダー</ZenText>
-                 <TouchableOpacity onPress={nextMonth}><Ionicons name="chevron-forward" size={20} color="#94A3B8" /></TouchableOpacity>
+                 <TouchableOpacity onPress={prevMonth}><Ionicons name="chevron-back" size={20} color={isDark ? "#94A3B8" : "#94A3B8"} /></TouchableOpacity>
+                 <ZenText className="font-bold" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>月間カレンダー</ZenText>
+                 <TouchableOpacity onPress={nextMonth}><Ionicons name="chevron-forward" size={20} color={isDark ? "#94A3B8" : "#94A3B8"} /></TouchableOpacity>
               </View>
 
               <View className="flex-row justify-between mb-2 px-2">
                 {WEEKDAYS.map((day, i) => (
                   <View key={i} style={{ width: cellWidth }} className="items-center">
-                    <ZenText className="text-slate-500 font-bold text-xs">{day}</ZenText>
+                    <ZenText className="font-bold text-xs" style={{ color: isDark ? '#64748B' : '#64748B' }}>{day}</ZenText>
                   </View>
                 ))}
               </View>
@@ -171,13 +173,15 @@ export default function InsightsScreen() {
                   const dateKey = formatDateKey(day);
                   const hasEntry = entriesMap[dateKey]?.length > 0;
                   const emotion = hasEntry ? entriesMap[dateKey][0].emotion : null;
-                  const color = emotion ? EMOTION_COLORS[emotion] : '#1F2937'; // Default to bg if no entry
-                  const hasEntryStyle = hasEntry ? { backgroundColor: color } : {}; // Dot style
-
+                  const color = emotion ? EMOTION_COLORS[emotion] : (isDark ? '#334155' : '#1F2937');
+                  
                   return (
                     <View key={dateKey} style={{ width: cellWidth, height: cellWidth }} className="items-center justify-center mb-2">
                        <View className="items-center justify-center">
-                          <ZenText className={`text-sm ${hasEntry ? 'text-indigo-600 font-bold' : 'text-slate-400'}`}>
+                          <ZenText className="text-sm" style={{ 
+                            color: hasEntry ? (isDark ? '#818CF8' : '#4F46E5') : (isDark ? '#475569' : '#94A3B8'), 
+                            fontWeight: hasEntry ? 'bold' : 'normal' 
+                          }}>
                              {day.getDate()}
                           </ZenText>
                           {hasEntry && (
@@ -191,51 +195,60 @@ export default function InsightsScreen() {
 
               {/* Legend */}
               <View className="flex-row justify-center gap-4 mt-4">
-                  <View className="flex-row items-center gap-1"><View className="w-2 h-2 rounded-full bg-emerald-400"/><ZenText className="text-slate-400 text-xs">穏やか</ZenText></View>
-                  <View className="flex-row items-center gap-1"><View className="w-2 h-2 rounded-full bg-amber-400"/><ZenText className="text-slate-400 text-xs">ハッピー</ZenText></View>
-                  <View className="flex-row items-center gap-1"><View className="w-2 h-2 rounded-full bg-indigo-400"/><ZenText className="text-slate-400 text-xs">悲しい</ZenText></View>
+                  <View className="flex-row items-center gap-1"><View className="w-2 h-2 rounded-full bg-emerald-400"/><ZenText className="text-xs" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>穏やか</ZenText></View>
+                  <View className="flex-row items-center gap-1"><View className="w-2 h-2 rounded-full bg-amber-400"/><ZenText className="text-xs" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>ハッピー</ZenText></View>
+                  <View className="flex-row items-center gap-1"><View className="w-2 h-2 rounded-full bg-indigo-400"/><ZenText className="text-xs" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>悲しい</ZenText></View>
               </View>
           </View>
 
           {/* Monthly Insights Section */}
           <View className="px-6 mt-8">
-             <ZenHeading level={3} className="text-slate-700 text-lg font-bold mb-4">今月の分析</ZenHeading>
+             <ZenHeading level={3} className="text-lg font-bold mb-4" style={{ color: isDark ? '#E2E8F0' : '#334155' }}>今月の分析</ZenHeading>
              
              <View className="flex-row gap-4 mb-4">
                  {/* Top Mood Card */}
-                 <View className="flex-1 bg-white/70 p-4 rounded-3xl border border-white/50 shadow-sm">
+                 <View className="flex-1 p-4 rounded-3xl border shadow-sm" style={{ 
+                    backgroundColor: isDark ? 'rgba(30,41,59,0.5)' : 'rgba(255,255,255,0.7)',
+                    borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.5)' 
+                 }}>
                      <View className="flex-row items-center gap-2 mb-2">
                          <View className="w-6 h-6 rounded-full bg-green-500/20 items-center justify-center">
                              <Ionicons name="happy" size={14} color="#4ADE80" />
                          </View>
-                         <ZenText className="text-slate-400 text-xs text-center">主な気分</ZenText>
+                         <ZenText className="text-xs text-center" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>主な気分</ZenText>
                      </View>
-                     <ZenText className="text-slate-800 text-xl font-bold capitalize">{stats.topMood}</ZenText>
+                     <ZenText className="text-xl font-bold capitalize" style={{ color: isDark ? '#FFFFFF' : '#1E293B' }}>{stats.topMood}</ZenText>
                  </View>
 
                  {/* Talking Time Card */}
-                 <View className="flex-1 bg-white/70 p-4 rounded-3xl border border-white/50 shadow-sm">
+                 <View className="flex-1 p-4 rounded-3xl border shadow-sm" style={{ 
+                    backgroundColor: isDark ? 'rgba(30,41,59,0.5)' : 'rgba(255,255,255,0.7)',
+                    borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.5)'
+                 }}>
                      <View className="flex-row items-center gap-2 mb-2">
                          <View className="w-6 h-6 rounded-full bg-blue-500/20 items-center justify-center">
                              <Ionicons name="mic" size={14} color="#60A5FA" />
                          </View>
-                         <ZenText className="text-slate-400 text-xs text-center">総会話時間</ZenText>
+                         <ZenText className="text-xs text-center" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>総会話時間</ZenText>
                      </View>
-                     <ZenText className="text-slate-800 text-xl font-bold">{Math.round(stats.totalTime / 60)} 分</ZenText>
+                     <ZenText className="text-xl font-bold" style={{ color: isDark ? '#FFFFFF' : '#1E293B' }}>{Math.round(stats.totalTime / 60)} 分</ZenText>
                  </View>
              </View>
 
              {/* Monthly Vibe Card */}
-             <View className="bg-white/70 p-5 rounded-3xl border border-white/50 shadow-sm mb-6 relative overflow-hidden">
+             <View className="p-5 rounded-3xl border shadow-sm mb-6 relative overflow-hidden" style={{ 
+                backgroundColor: isDark ? 'rgba(30,41,59,0.5)' : 'rgba(255,255,255,0.7)',
+                borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.5)'
+             }}>
                  <LinearGradient
-                    colors={['rgba(99, 102, 241, 0.05)', 'transparent']}
+                    colors={isDark ? ['rgba(99, 102, 241, 0.15)', 'transparent'] : ['rgba(99, 102, 241, 0.05)', 'transparent']}
                     style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 100 }}
                  />
                  <View className="flex-row items-center gap-2 mb-2">
                      <Ionicons name="sparkles" size={16} color="#818CF8" />
-                     <ZenText className="text-slate-700 font-bold">今月のバイブス</ZenText>
+                     <ZenText className="font-bold" style={{ color: isDark ? '#E2E8F0' : '#334155' }}>今月のバイブス</ZenText>
                  </View>
-                 <ZenText className="text-slate-500 text-sm leading-6">
+                 <ZenText className="text-sm leading-6" style={{ color: isDark ? '#CBD5E1' : '#64748B' }}>
                     今月は {stats.topMood} な気分が多いようですね。
                     {stats.topMood === 'happy' && '充実した日々を過ごせているようです！'}
                     {stats.topMood === 'calm' && '穏やかな時間を大切にできています。'}
@@ -244,7 +257,7 @@ export default function InsightsScreen() {
                  </ZenText>
                  
                  <TouchableOpacity className="mt-4 flex-row items-center">
-                     <ZenText className="text-indigo-500 font-bold mr-1">詳細を見る</ZenText>
+                     <ZenText className="font-bold mr-1" style={{ color: '#6366F1' }}>詳細を見る</ZenText>
                      <Ionicons name="arrow-forward" size={16} color="#6366F1" />
                  </TouchableOpacity>
              </View>
@@ -256,3 +269,4 @@ export default function InsightsScreen() {
     </View>
   );
 }
+

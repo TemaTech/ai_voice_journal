@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { JournalEditorModal } from '../components/JournalEditorModal';
 import { VoiceVisualizer } from '../components/ui/VoiceVisualizer';
 import { useCallSession } from '../hooks/useCallSession';
+import { NotificationService } from '../services/notification';
 import { JournalEntry, StorageService } from '../services/storage';
 import { CallState } from '../types/callSession';
 
@@ -136,7 +137,22 @@ export default function TalkScreen() {
         emotion: 'happy',
         createdAt: Date.now()
       });
-      await StorageService.saveUserSettings({ isOnboarded: true });
+
+      // 通知許可の確認
+      const granted = await NotificationService.registerForPushNotificationsAsync();
+      
+      const settingsUpdate = {
+        isOnboarded: true,
+        notificationEnabled: granted,
+        notificationTime: '21:00'
+      };
+
+      if (granted) {
+         await NotificationService.scheduleDailyReminder(21, 0);
+      }
+
+      await StorageService.saveUserSettings(settingsUpdate);
+      
       disconnect();
       try {
         router.replace('/');

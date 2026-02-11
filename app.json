@@ -41,7 +41,16 @@
           }
         }
       ],
-      "@mykin-ai/expo-audio-stream"
+      "@mykin-ai/expo-audio-stream",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#ffffff",
+          "sounds": []
+        }
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,

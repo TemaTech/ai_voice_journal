@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { calculateStreak } from '../utils/date';
 
 const KEYS = {
   USER_SETTINGS: 'user_settings',
@@ -17,6 +18,11 @@ export interface UserSettings {
   bio?: string;
   // AI Voice Customization
   aiVoice?: string; // Voice name, e.g. "Aoede", "Charon"
+  // Daily Reminder
+  notificationEnabled: boolean;
+  notificationTime: string; // "HH:mm"
+  // Theme
+  theme: 'system' | 'light' | 'dark';
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -27,6 +33,9 @@ const DEFAULT_SETTINGS: UserSettings = {
   goals: '',
   bio: '',
   aiVoice: 'Aoede', // Default female voice
+  notificationEnabled: false,
+  notificationTime: '21:00',
+  theme: 'system',
 };
 
 export interface JournalEntry {
@@ -86,6 +95,10 @@ export const StorageService = {
         updated = [entry, ...current];
       }
       await AsyncStorage.setItem(KEYS.JOURNAL_ENTRIES, JSON.stringify(updated));
+
+      // Update Streak
+      const streak = calculateStreak(updated);
+      await this.saveUserSettings({ streakCount: streak });
     } catch (e) {
       console.error('Failed to save journal entry', e);
     }
@@ -101,6 +114,7 @@ export const StorageService = {
     }
   },
 
+  
   async deleteJournalEntry(id: string): Promise<void> {
     try {
       const current = await this.getJournalEntries();
@@ -116,6 +130,44 @@ export const StorageService = {
         await AsyncStorage.clear();
     } catch (e) {
         console.error('Failed to clear storage', e);
+    }
+  },
+
+  // Export & Data Management
+  async exportDataAsJson(): Promise<string> {
+    try {
+      const settings = await this.getUserSettings();
+      const entries = await this.getJournalEntries();
+      
+      const exportData = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        settings,
+        entries
+      };
+      
+      return JSON.stringify(exportData, null, 2);
+    } catch (e) {
+      console.error('Failed to export data', e);
+      throw e;
+    }
+  },
+
+  // Search
+  async searchJournalEntries(query: string): Promise<JournalEntry[]> {
+    try {
+      const allEntries = await this.getJournalEntries();
+      if (!query.trim()) return allEntries;
+
+      const lowerQuery = query.toLowerCase();
+      return allEntries.filter(entry => 
+        entry.title.toLowerCase().includes(lowerQuery) ||
+        entry.summary.toLowerCase().includes(lowerQuery) ||
+        entry.emotion.toLowerCase().includes(lowerQuery)
+      );
+    } catch (e) {
+      console.error('Failed to search entries', e);
+      return [];
     }
   }
 };

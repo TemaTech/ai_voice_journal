@@ -1,4 +1,5 @@
-import { View, ViewProps } from 'react-native';
+import { useColorScheme } from 'nativewind';
+import { View, ViewProps, ViewStyle } from 'react-native';
 
 type GlassViewProps = ViewProps & {
   className?: string;
@@ -8,11 +9,23 @@ type GlassViewProps = ViewProps & {
 export function GlassView({ className, intensity = 50, style, children, ...props }: GlassViewProps) {
   //将来的にはExpo BlurViewを使うが、まずは非依存のStyleで実装
   // Premium Cleanな「すりガラス」風スタイル
+  const { colorScheme } = useColorScheme();
+  const isDark = colorScheme === 'dark';
+
+  // className または style に backgroundColor が含まれているかチェック
+  const hasCustomBg = className?.includes('bg-') || 
+    (style && typeof style === 'object' && 'backgroundColor' in (style as ViewStyle));
+
+  // デフォルトの背景色（dark: variant の代わりにインラインで適用）
+  const defaultBgStyle = hasCustomBg ? {} : {
+    backgroundColor: isDark ? 'rgba(39, 39, 42, 0.9)' : 'rgba(255, 255, 255, 0.85)',
+  };
   
   return (
     <View
-      className={`border border-glass-border rounded-3xl backdrop-blur-xl overflow-hidden ${className?.includes('bg-') ? '' : 'bg-white/85 dark:bg-zinc-800/90'} ${className || ''}`}
+      className={`border border-glass-border rounded-3xl overflow-hidden ${className || ''}`}
       style={[
+        defaultBgStyle,
         {
           shadowColor: "#000",
           shadowOffset: {
@@ -31,3 +44,4 @@ export function GlassView({ className, intensity = 50, style, children, ...props
     </View>
   );
 }
+

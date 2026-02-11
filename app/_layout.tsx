@@ -10,13 +10,26 @@ configureReanimatedLogger({
 });
 
 import { Stack } from "expo-router";
+import { StatusBar } from 'expo-status-bar';
+import { ThemeProvider } from '../context/ThemeContext';
 import "../global.css";
+
+function RootLayoutContent() {
+  return (
+    <>
+      <StatusBar style="auto" />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="talk" options={{ presentation: 'fullScreenModal' }} />
+      </Stack>
+    </>
+  );
+}
 
 export default function RootLayout() {
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      <Stack.Screen name="talk" options={{ presentation: 'fullScreenModal' }} />
-    </Stack>
+    <ThemeProvider>
+      <RootLayoutContent />
+    </ThemeProvider>
   );
 }
