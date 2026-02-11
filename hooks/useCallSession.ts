@@ -5,7 +5,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { GeminiLiveService } from '../services/gemini-live';
 import { getGeminiRestService } from '../services/gemini-rest';
+import { RecoveryService } from '../services/recovery';
+import { StorageService } from '../services/storage';
 import { CallSessionConfig, CallSessionState, CallState, ConversationLog } from '../types/callSession';
+import { generateSystemInstruction } from '../utils/ai-prompt';
 import { useAudioSession } from './useAudioSession';
 import { useSimpleAudioPlayer } from './useSimpleAudioPlayer';
 
@@ -17,6 +20,9 @@ interface UseCallSessionReturn extends CallSessionState {
   connect: () => void;
   disconnect: () => void;
   endConversation: () => Promise<{title: string; summary: string; emotion: string} | null>;
+  // ミュート
+  isMuted: boolean;
+  toggleMute: () => void;
 }
 
 export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionReturn => {
@@ -39,7 +45,11 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
   const geminiServiceRef = useRef<GeminiLiveService | null>(null);
   const lightSilenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deepSilenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const callStateRef = useRef<CallState>(CallState.ENDED);
+  const isTurnCompletingRef = useRef<boolean>(false); // ターン完了処理中フラグ（競合回避用）
+  const isInterruptingRef = useRef<boolean>(false); // 割り込み処理中フラグ（二重割り込み防止）
+
   const systemInstructionRef = useRef(systemInstruction);
   systemInstructionRef.current = systemInstruction;
   
@@ -72,7 +82,6 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
   // 無音タイマーを開始（2段階対応）
   const startSilenceTimer = useCallback(() => {
     resetSilenceTimer();
-    console.log(`CallSession: Starting silence timers (light: ${LIGHT_SILENCE_TIMEOUT_MS/1000}s, deep: ${DEEP_SILENCE_TIMEOUT_MS/1000}s)`);
     
     // 軽い合いの手
     lightSilenceTimerRef.current = setTimeout(() => {
@@ -108,13 +117,39 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
       const currentState = callStateRef.current;
       // AI発話中なら割り込み処理
       if (currentState === CallState.AI_TALKING) {
+        // 二重割り込み防止
+        if (isInterruptingRef.current) {
+          console.log('CallSession: Already interrupting, skip');
+          return;
+        }
+        isInterruptingRef.current = true;
+        
+        // Turn complete処理中の場合もリセット
+        // （Turn completeと割り込みが重なると、isTurnCompletingRefが
+        //  1.2秒間trueのまま残り、新しいaudioイベントをブロックしてしまう）
+        isTurnCompletingRef.current = false;
+        
         console.log('CallSession: Interrupting AI');
         geminiServiceRef.current?.sendInterrupt();
-        audioPlayerRef.current?.interruptAI();
         updateCallState(CallState.INTERRUPTED);
-        setTimeout(() => {
-          updateCallState(CallState.USER_TALKING);
-        }, 100);
+        
+        // interruptAI()をtry-catchでラップし、失敗してもアプリがクラッシュしないようにする
+        // 非同期処理完了後に状態を遷移することで、ネイティブ側の処理と状態の整合性を保つ
+        (async () => {
+          try {
+            await audioPlayerRef.current?.interruptAI();
+          } catch (e) {
+            console.error('CallSession: interruptAI failed', e);
+          } finally {
+            isInterruptingRef.current = false;
+            // 割り込み完了後にUSER_TALKINGへ遷移
+            // （ENDEDに変わっていないことを確認）
+            const stateAfterInterrupt = callStateRef.current;
+            if (stateAfterInterrupt !== CallState.ENDED) {
+              updateCallState(CallState.USER_TALKING);
+            }
+          }
+        })();
       } else {
         updateCallState(CallState.USER_TALKING);
       }
@@ -135,9 +170,7 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
   audioPlayerRef.current = audioPlayer;
 
   // 実際の接続処理
-  const doConnect = useCallback(() => {
-    console.log('CallSession: doConnect called, isAudioReady:', isAudioReady);
-    
+  const doConnect = useCallback(async () => {
     if (!isAudioReady) {
       console.log('CallSession: Audio not ready, setting pendingConnect');
       setPendingConnect(true);
@@ -162,7 +195,12 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
       return;
     }
 
-    const service = new GeminiLiveService({ apiKey });
+    // Load user settings to get voice preference
+    const userSettings = await StorageService.getUserSettings();
+    const voiceName = userSettings.aiVoice || 'Aoede';
+    console.log('CallSession: Using voice:', voiceName);
+
+    const service = new GeminiLiveService({ apiKey, voiceName });
     geminiServiceRef.current = service;
 
     // イベントリスナー設定
@@ -196,21 +234,42 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
     });
 
     service.on('audio', (base64Audio) => {
+      // ターン完了処理中は新しい音声イベントを無視（前のターンの残りとみなす）
+      if (isTurnCompletingRef.current) {
+        return;
+      }
+      
+      // 割り込み処理中も新しい音声イベントを無視
+      // （ネイティブのstopPlaying完了前に到着した残りチャンクをブロック）
+      if (isInterruptingRef.current) {
+        return;
+      }
+      
       // AI音声を受信 -> 再生
-      console.log('CallSession: Received AI audio');
       updateCallState(CallState.AI_TALKING);
       resetSilenceTimer();
       audioPlayerRef.current?.playAudio(base64Audio);
     });
 
+// ... (remove the import)
+
+// ...
+
     service.on('text', (text) => {
-      // AIテキスト受信（表示用・要約用）
-      console.log('CallSession: AI says:', text);
+      // AIテキスト受信（ストリーミング断片。確定ログはgemini-live.tsで出力）
+      const log: ConversationLog = {
+        timestamp: Date.now(),
+        speaker: 'ai',
+        text,
+      };
+      setConversationLogs(prev => [...prev, log]);
+      RecoveryService.appendLog(log);
     });
 
     service.on('inputTranscript', (text) => {
       // ユーザー音声の認識結果
       console.log('CallSession: User said:', text);
+
       const log: ConversationLog = {
         timestamp: Date.now(),
         speaker: 'user',
@@ -218,23 +277,36 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
       };
       setConversationLogs(prev => [...prev, log]);
       onConversationLog?.(log);
+      RecoveryService.appendLog(log);
     });
 
     service.on('turnComplete', () => {
       console.log('CallSession: Turn complete');
+      isTurnCompletingRef.current = true;
+      
+      // 音声送信を一時停止（残響が次のターンとして誤認識されるのを防ぐ）
+      geminiServiceRef.current?.pauseAudioSending();
+      
       audioPlayerRef.current?.onTurnComplete();
       
       // 沈黙カウンターをリセット
       geminiServiceRef.current?.resetSilenceCount();
       
-      // AI発話完了 -> LISTENINGへ
+      // AI発話完了 -> LISTENINGへ（500ms -> 200msに短縮して応答性を向上）
       setTimeout(() => {
         const currentState = callStateRef.current;
         if (currentState !== CallState.ENDED && currentState !== CallState.USER_TALKING) {
           updateCallState(CallState.LISTENING);
           startSilenceTimer();
         }
-      }, 500);
+        
+        // 状態遷移完了後にフラグ解除と音声送信再開（少しバッファを持たせる）
+        setTimeout(() => {
+          isTurnCompletingRef.current = false;
+          geminiServiceRef.current?.resumeAudioSending();
+        }, 1000); // 1秒間は残響による誤検知を完全にブロック
+        
+      }, 200);
     });
 
     service.on('interrupted', () => {
@@ -243,7 +315,21 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
 
     // 接続開始
     console.log('CallSession: Starting WebSocket connection...');
-    service.connect(systemInstructionRef.current);
+    
+    let instructionToUse = systemInstructionRef.current;
+    
+    // プロンプトが明示的に指定されていない場合（オンボーディング以外）、動的に生成する
+    if (!instructionToUse) {
+      console.log('CallSession: Generating personalized system instruction...');
+      try {
+        instructionToUse = await generateSystemInstruction();
+        console.log('CallSession: Instruction generated, length:', instructionToUse?.length);
+      } catch (e) {
+        console.error('CallSession: Failed to generate instruction', e);
+      }
+    }
+    
+    service.connect(instructionToUse);
 
   }, [isAudioReady, updateCallState, resetSilenceTimer, startSilenceTimer, onError, onConversationLog]);
 
@@ -298,10 +384,24 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
       const restService = getGeminiRestService();
       const journal = await restService.generateJournal(conversationHistory);
       console.log('CallSession: Journal generated:', journal);
+      
+      // 正常に日記生成（またはフォールバック）できたので、一時保存ログを消す
+      RecoveryService.clear();
+      
       return journal;
     } catch (error) {
       console.error('CallSession: Failed to generate journal via REST API', error);
-      return null;
+      // エラー時はフォールバックとして会話ログをそのまま保存する
+      const fallbackJournal = {
+        title: '日記生成エラー (自動保存)',
+        summary: '【AIによる生成に失敗しました。会話ログを保存します】\n\n' + conversationHistory,
+        emotion: 'neutral' as const
+      };
+      
+      // フォールバックでも一応保存できているのでクリアする（次回起動時に復元と競合しないように）
+      RecoveryService.clear();
+      
+      return fallbackJournal;
     }
   }, [disconnect]);
 
@@ -325,5 +425,8 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
     connect,
     disconnect,
     endConversation,
+    // Mute
+    isMuted: audioPlayer.isMuted,
+    toggleMute: audioPlayer.toggleMute,
   };
 };

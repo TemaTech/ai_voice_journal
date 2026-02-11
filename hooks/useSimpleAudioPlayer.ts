@@ -42,6 +42,16 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
   
   // 再生中チャンク数を追跡（isPlaying状態管理用）
   const pendingChunksRef = useRef<number>(0);
+  const lastPlaybackTimeRef = useRef<number>(Date.now()); // 再生終了時刻（エコーキャンセル用）
+  const isAiPlayingRef = useRef<boolean>(false); // AI発話中フラグ（より厳密な管理用）
+  
+  // 割り込みフラグ（playAudioの即時ブロック用）
+  // interruptAI()でtrueにし、次のターン開始時にfalseに戻す
+  const isInterruptedRef = useRef<boolean>(false);
+  
+  // 停止処理中フラグ（stopPlayingの二重実行防止）
+  const isStoppingRef = useRef<boolean>(false);
+
   
   // VAD用タイマー
   const speechStartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -78,7 +88,13 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
   // VAD処理
   const processVAD = useCallback((base64Audio: string) => {
     // AI発話中はVADをスキップ（エコーバック誤検出防止）
-    if (pendingChunksRef.current > 0) {
+    if (pendingChunksRef.current > 0 || isAiPlayingRef.current) {
+      return;
+    }
+
+    // 再生終了直後もVADをスキップ（残響・テイルエコー・レイテンシー対策）
+    // 800ms -> 1500ms に延長してテイルエコーを確実に回避
+    if (Date.now() - lastPlaybackTimeRef.current < 1500) {
       return;
     }
     
@@ -122,9 +138,51 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
   // AI音声再生（シンプルな即時再生）
   const playAudio = useCallback(async (base64Audio: string) => {
     try {
+      // 割り込み中は音声チャンクを処理しない
+      // このフラグはinterruptAI()でtrue、interruptAI完了後にfalseにリセットされる
+      if (isInterruptedRef.current) {
+        return;
+      }
+      
+      // ターン開始時（まだ再生中でない場合）、オーディオエンジンの状態をリセット
+      // pendingChunksRef（Ref = 同期更新）のみで判定（React stateのisPlayingは非同期で古い値の場合がある）
+      if (pendingChunksRef.current === 0) {
+        try {
+          // エンジンの再構成（fire-and-forget: awaitしない）
+          // awaitすると最初のチャンクの再生が遅延し、音声途切れの原因になる
+          ExpoPlayAudioStream.setSoundConfig({
+            sampleRate: 24000 as any,
+            playbackMode: 'voiceProcessing',
+          }).catch((e: Error) => {
+            if (!isInterruptedRef.current) {
+              console.error('SimpleAudioPlayer: Engine config failed', e);
+            }
+          });
+        } catch (e) {
+          console.error('SimpleAudioPlayer: Engine reset failed', e);
+        }
+      }
+
+      // 再度チェック（上記の非同期処理中に割り込みが入った可能性）
+      if (isInterruptedRef.current) {
+        return;
+      }
+
       pendingChunksRef.current += 1;
       setIsPlaying(true);
+      isAiPlayingRef.current = true; // AI発話開始
+
       
+      // データ長チェック（空データやヘッダーのみのデータを弾く）
+      if (!base64Audio || base64Audio.length < 100) {
+        pendingChunksRef.current = Math.max(0, pendingChunksRef.current - 1);
+         if (pendingChunksRef.current === 0) {
+          setIsPlaying(false);
+          lastPlaybackTimeRef.current = Date.now(); // 終了時刻更新
+        }
+        return;
+      }
+
       // ネイティブのplaySoundを直接呼び出し
       await ExpoPlayAudioStream.playSound(
         base64Audio, 
@@ -132,34 +190,75 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
         'pcm_s16le' // Gemini APIは16bit PCMを返す
       );
       
+      // 再生成功後もデクリメント
+      pendingChunksRef.current = Math.max(0, pendingChunksRef.current - 1);
+      if (pendingChunksRef.current === 0) {
+        setIsPlaying(false);
+        lastPlaybackTimeRef.current = Date.now(); // 終了時刻更新
+      }
+      
     } catch (error) {
       console.error('SimpleAudioPlayer: Failed to play audio', error);
       pendingChunksRef.current = Math.max(0, pendingChunksRef.current - 1);
       if (pendingChunksRef.current === 0) {
         setIsPlaying(false);
+        lastPlaybackTimeRef.current = Date.now(); // 終了時刻更新
       }
     }
   }, []);
 
   // 再生停止 - ユーザー割り込み時などに使用
   const stopPlaying = useCallback(async () => {
+    // 二重実行防止
+    if (isStoppingRef.current) {
+      return;
+    }
+    isStoppingRef.current = true;
+    
     try {
-      // 現在のターンのキューをクリア
-      await ExpoPlayAudioStream.clearSoundQueueByTurnId(turnIdRef.current);
-      await ExpoPlayAudioStream.stopSound();
+      // まず状態をリセット（ネイティブ呼び出し前に行うことで、
+      // 並行して走っているplayAudioが新たなチャンクを送らないようにする）
       pendingChunksRef.current = 0;
       setIsPlaying(false);
+      isAiPlayingRef.current = false;
+
+      // キューのクリアと停止は個別にtry-catchし、一方が失敗しても他方を実行
+      try {
+        await ExpoPlayAudioStream.clearSoundQueueByTurnId(turnIdRef.current);
+      } catch (e) {
+        console.error('SimpleAudioPlayer: Failed to clear queue', e);
+      }
+      
+      try {
+        await ExpoPlayAudioStream.stopSound();
+      } catch (e) {
+        console.error('SimpleAudioPlayer: Failed to stop sound', e);
+      }
+
       console.log('SimpleAudioPlayer: Playback stopped (interrupt)');
     } catch (error) {
       console.error('SimpleAudioPlayer: Failed to stop playing', error);
+    } finally {
+      isStoppingRef.current = false;
     }
+  }, []);
+
+  // Mute State
+  const [isMuted, setIsMuted] = useState(false);
+  const isMutedRef = useRef(false); // Ref for access in callbacks
+
+  // Mute toggle
+  const toggleMute = useCallback(() => {
+    setIsMuted(prev => {
+      const newVal = !prev;
+      isMutedRef.current = newVal;
+      return newVal;
+    });
   }, []);
 
   // 録音開始
   const startRecording = useCallback(async () => {
     try {
-      console.log('SimpleAudioPlayer: Starting microphone');
-      
       // 新しいターンIDを生成（新しい会話ターン開始）
       turnIdRef.current = `turn-${Date.now()}`;
       
@@ -171,6 +270,10 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
         enableProcessing: true, // AEC有効
         onAudioStream: async (event: AudioDataEvent) => {
           if (event.data && typeof event.data === 'string' && event.data.length > 0) {
+            // ミュート中は処理をスキップ (Refを使用)
+            if (isMutedRef.current) {
+              return;
+            }
             // VAD処理
             processVAD(event.data);
             // Geminiへ送信
@@ -190,7 +293,7 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
     } catch (error) {
       console.error('SimpleAudioPlayer: Failed to start microphone', error);
     }
-  }, [onAudioData, sampleRate, processVAD]);
+  }, [onAudioData, sampleRate, processVAD]); // Removed isMuted from dependency array
 
   // 録音停止
   const stopRecording = useCallback(async () => {
@@ -223,9 +326,28 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
   // AIの発話を中断し、新しいターンを開始
   const interruptAI = useCallback(async () => {
     console.log('SimpleAudioPlayer: Interrupting AI');
+    
+    // 即座に割り込みフラグをセット（playAudioの新規チャンクを即時ブロック）
+    // ネイティブ側のstopPlayingが完了する前でも、JS側で新しいチャンクの送信を防ぐ
+    isInterruptedRef.current = true;
+    
     await stopPlaying();
+    
     // 新しいターンIDを生成
     turnIdRef.current = `turn-${Date.now()}`;
+    
+    // 割り込みフラグをリセット（次のターンの音声を受け入れる準備）
+    // stopPlaying完了後にリセットすることで、割り込み中の音声チャンクを確実にブロック
+    isInterruptedRef.current = false;
+    
+    // ネイティブ側の割り込みフラグも解除（次のplay()呼び出しが受け入れられるように）
+    try {
+      ExpoPlayAudioStream.resumeSound();
+    } catch (e) {
+      console.error('SimpleAudioPlayer: resumeSound failed', e);
+    }
+    
+    console.log('SimpleAudioPlayer: Interrupt complete, ready for next turn');
   }, [stopPlaying]);
 
   // AIのターンが完了した時
@@ -237,6 +359,8 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
     setTimeout(() => {
       if (pendingChunksRef.current === 0) {
         setIsPlaying(false);
+        isAiPlayingRef.current = false; // ターン完了と共にAI発話フラグを解除
+        lastPlaybackTimeRef.current = Date.now(); // 念のため時刻更新
       }
     }, 500);
   }, []);
@@ -246,12 +370,16 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
     turnIdRef.current = `turn-${Date.now()}`;
     pendingChunksRef.current = 0;
     setIsPlaying(false);
+    isAiPlayingRef.current = false;
+    isInterruptedRef.current = false; // 割り込みフラグもリセット
   }, []);
 
   return {
     isRecording,
     isPlaying,
     isSpeaking,  // ユーザー発話中フラグ（新規追加）
+    isMuted,     // ミュート状態
+    toggleMute,  // ミュート切り替え
     startRecording,
     stopRecording,
     playAudio,

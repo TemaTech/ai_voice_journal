@@ -10,11 +10,23 @@ export interface UserSettings {
   userName?: string;
   lastTalkDate?: string;
   streakCount: number;
+  // Extended Profile
+  interests?: string[];
+  occupation?: string;
+  goals?: string;
+  bio?: string;
+  // AI Voice Customization
+  aiVoice?: string; // Voice name, e.g. "Aoede", "Charon"
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
   isOnboarded: false,
   streakCount: 0,
+  interests: [],
+  occupation: '',
+  goals: '',
+  bio: '',
+  aiVoice: 'Aoede', // Default female voice
 };
 
 export interface JournalEntry {
@@ -23,6 +35,7 @@ export interface JournalEntry {
   title: string;
   summary: string;
   emotion: 'happy' | 'sad' | 'excited' | 'calm' | 'tired' | 'neutral';
+  duration?: number; // Duration in seconds
   createdAt: number;
 }
 
@@ -64,11 +77,37 @@ export const StorageService = {
   async saveJournalEntry(entry: JournalEntry): Promise<void> {
     try {
       const current = await this.getJournalEntries();
-      // Add new entry to the beginning
-      const updated = [entry, ...current];
+      // Check if entry already exists (by ID) to avoid duplicates if calling save twice
+      const exists = current.find(e => e.id === entry.id);
+      let updated;
+      if (exists) {
+        updated = current.map(e => e.id === entry.id ? entry : e);
+      } else {
+        updated = [entry, ...current];
+      }
       await AsyncStorage.setItem(KEYS.JOURNAL_ENTRIES, JSON.stringify(updated));
     } catch (e) {
       console.error('Failed to save journal entry', e);
+    }
+  },
+
+  async updateJournalEntry(entry: JournalEntry): Promise<void> {
+    try {
+      const current = await this.getJournalEntries();
+      const updated = current.map(e => e.id === entry.id ? entry : e);
+      await AsyncStorage.setItem(KEYS.JOURNAL_ENTRIES, JSON.stringify(updated));
+    } catch (e) {
+      console.error('Failed to update journal entry', e);
+    }
+  },
+
+  async deleteJournalEntry(id: string): Promise<void> {
+    try {
+      const current = await this.getJournalEntries();
+      const updated = current.filter(e => e.id !== id);
+      await AsyncStorage.setItem(KEYS.JOURNAL_ENTRIES, JSON.stringify(updated));
+    } catch (e) {
+      console.error('Failed to delete journal entry', e);
     }
   },
 

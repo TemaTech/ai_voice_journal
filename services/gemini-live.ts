@@ -12,6 +12,7 @@ const PATH = '/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGen
 interface GeminiLiveConfig {
   apiKey: string;
   model?: string;
+  voiceName?: string; // e.g. "Aoede", "Charon", "Kore", "Fenrir", "Puck"
 }
 
 // イベント型定義
@@ -50,12 +51,28 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
   // 沈黙カウンター（段階的対応用）
   private silencePromptCount: number = 0;
   
+  // ターンカウンター（リマインダー送信用）
+  private turnCount: number = 0;
+  
   // デバッグ用カウンター
   private audioChunkCount: number = 0;
 
   constructor(config: GeminiLiveConfig) {
     super();
     this.config = config;
+  }
+  
+  // 音声送信一時停止フラグ
+  private isAudioSendingPaused: boolean = false;
+
+  // 音声送信を一時停止（ターン切り替え時の残響対策）
+  pauseAudioSending() {
+    this.isAudioSendingPaused = true;
+  }
+
+  // 音声送信を再開
+  resumeAudioSending() {
+    this.isAudioSendingPaused = false;
   }
 
   // 会話ログをリセット
@@ -64,6 +81,7 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
     this.currentAiResponse = '';
     this.currentUserInput = '';  // ユーザー入力バッファもリセット
     this.isInterrupted = false;
+    this.turnCount = 0;
   }
 
   // 会話ログを取得（日記生成用）
@@ -102,6 +120,8 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
   private finalizeAiResponse() {
     if (this.currentAiResponse.trim()) {
       this.recordAiMessage(this.currentAiResponse);
+      // まとめてログ出力
+      console.log('[AI発話]', this.currentAiResponse.substring(0, 100) + (this.currentAiResponse.length > 100 ? '...' : ''));
       this.currentAiResponse = '';
     }
   }
@@ -109,8 +129,10 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
   // ユーザーの現在の入力を確定して記録（バッファリング対応）
   private finalizeUserInput() {
     if (this.currentUserInput.trim()) {
-      this.recordUserMessage(this.currentUserInput);
-      console.log('Finalized user input:', this.currentUserInput.trim());
+      const cleanedInput = this.currentUserInput.trim().replace(/\s+/g, ''); // 日本語なのでスペースを完全除去
+      this.recordUserMessage(cleanedInput);
+      // まとめてログ出力
+      console.log('[ユーザー発話]', cleanedInput);
       this.currentUserInput = '';
     }
   }
@@ -154,6 +176,18 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
 ・ユーザーが考えている沈黙は大切です。急かさないでください。
 ・必ず「です」「ます」調の敬語で話してください。
 
+【会話の継続性：最も重要】
+・絶対に自分から会話を終わらせないでください。会話を終了するのはユーザーが決めます。
+・「今日はありがとう」「いい一日になりますように」「お休みなさい」「じゃあ」「また」等の終了を匹わせる言葉は禁止です。
+・「まとめると」「今日のお話を振り返ると」のような要約も禁止です。
+・必ず毎ターンの終わりに次の質問をしてください。会話が途切れないように。
+・話題が尽きたと感じたら、別の話題に切り替えてください（例：「他に何かありましたか？」「そういえば、プライベートでは何かありましたか？」）。
+
+【発話の形式：完結した文で話す】
+・必ず完結した文で終わらせてください。文の途中で切らないでください。
+・１回の発話は「共感の一言＋質問」の形で、簡潔にまとめてください。
+・共感と質問を別々に分けないでください（１つの発話ブロックでまとめて話す）。
+
 【会話の基本姿勢：選択肢を出して話しやすくする】
 質問するときは、必ず選択肢を添えてください。
 これが一番重要です。選択肢があると答えやすくなります。
@@ -188,6 +222,8 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
 ✗「休息が大切です」のようなアドバイス（求められるまで控えて）
 ✗ 選択肢なしの曖昧な質問（「どうでしたか？」）
 ✗ 2つ以上の質問を一度に（「いつ？誰と？どこで？」は禁止）
+✗ 会話を終わらせる発言（「いい一日になりますように」「お休みなさい」「ありがとう」等）
+✗ 会話のまとめや振り返り（「まとめると」「今日のお話を振り返ると」等）
 
 【感情への寄り添い方】
 ・疲れている様子 →「お疲れ様です。今日は何かあったんですか？」
@@ -197,19 +233,25 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
 
     const setupMessage = {
       setup: {
-        model: this.config.model || "models/gemini-2.0-flash-exp",
+        model: this.config.model || "models/gemini-2.5-flash-native-audio-preview-12-2025",
         generationConfig: {
           responseModalities: ["AUDIO"],  // TEXT+AUDIOはサポート外、AUDIOのみ使用
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: {
-                voiceName: "Aoede"
+                voiceName: this.config.voiceName || "Aoede"
               }
             }
+          },
+          // 思考モードを無効化（Live APIで不安定になるため）
+          thinkingConfig: {
+            thinkingBudget: 0
           }
         },
         // ユーザー音声のテキスト化を有効化（日記生成用）
         inputAudioTranscription: {},
+        // AI音声のテキスト化を有効化（ログ・日記生成用）
+        outputAudioTranscription: {},
         // System instructions for the AI character
         systemInstruction: {
           parts: [
@@ -228,19 +270,18 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
   // 音声チャンクを送信
   sendAudioChunk(base64Audio: string) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.log('WebSocket not ready, skipping audio chunk');
-      return;
+      return;  // WebSocketが準備できていない場合は静かにスキップ
     }
     if (!this.setupComplete) {
-      console.log('Setup not complete, skipping audio chunk');
+      return;  // セットアップ完了前はスキップ
+    }
+    
+    // 送信一時停止中はスキップ（残響対策）
+    if (this.isAudioSendingPaused) {
       return;
     }
 
-    // デバッグ: 音声データ送信ログ（最初の数回のみ）
     this.audioChunkCount++;
-    if (this.audioChunkCount <= 5 || this.audioChunkCount % 50 === 0) {
-      console.log(`Sending audio chunk #${this.audioChunkCount}, size: ${base64Audio.length}`);
-    }
 
     // Gemini Live API正式フォーマット
     // 参考: https://ai.google.dev/api/multimodal-live
@@ -264,12 +305,10 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
   // テキストメッセージを送信
   sendText(text: string, recordInHistory: boolean = true) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.log('WebSocket not ready, skipping text');
-      return;
+      return;  // WebSocketが準備できていない
     }
     if (!this.setupComplete) {
-      console.log('Setup not complete, skipping text');
-      return;
+      return;  // セットアップ完了前
     }
 
     const message = {
@@ -284,7 +323,6 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
       }
     };
 
-    console.log('Sending text:', text);
     this.ws.send(JSON.stringify(message));
     
     // 会話履歴に記録（システムプロンプト等は除外可能）
@@ -299,7 +337,6 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
    * 特別なメッセージ送信は不要（かつサポートされていない）
    */
   sendInterrupt() {
-    console.log('Interrupt requested (client-side only)');
     this.isInterrupted = true;
     this.emit('interrupted');
   }
@@ -316,7 +353,6 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
     const newMood = inferMoodFromTexts(recentUserTexts);
     
     if (newMood !== this.currentMood) {
-      console.log(`Mood changed: ${this.currentMood} -> ${newMood}`);
       this.currentMood = newMood;
     }
     
@@ -337,9 +373,10 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
    */
   sendLightSilencePrompt() {
     const prompt = getLightSilencePrompt();
-    console.log('Sending light silence prompt:', prompt);
     this.silencePromptCount++;
-    this.sendText(prompt, false);  // 履歴には記録しない
+    // 会話継続のリマインダーを付加
+    const fullPrompt = prompt + '\n（重要：会話を終わらせないでください。必ず次の質問をしてください）';
+    this.sendText(fullPrompt, false);  // 履歴には記録しない
   }
 
   /**
@@ -350,9 +387,10 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
     // 感情状態に応じたヒントを追加
     const moodHint = this.getMoodHint();
     const prompt = getDeepSilencePrompt();
-    const fullPrompt = moodHint ? `${moodHint}\n${prompt}` : prompt;
+    // 会話継続のリマインダーを付加
+    const reminder = '\n（重要：会話を終わらせないでください。まとめたり、お疋いの言葉を言ったりしないでください。必ず次の質問をしてください）';
+    const fullPrompt = moodHint ? `${moodHint}\n${prompt}${reminder}` : `${prompt}${reminder}`;
     
-    console.log('Sending deep silence prompt:', fullPrompt);
     this.silencePromptCount++;
     this.sendText(fullPrompt, false);  // 履歴には記録しない
   }
@@ -388,15 +426,12 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
         });
         message = JSON.parse(text);
       } else {
-        console.log("Received unknown data type:", typeof data);
-        return; 
+        return;  // 不明なデータ型は無視
       }
     } catch (e) {
       console.error("Failed to parse message", e);
       return;
     }
-
-    console.log('Received message:', JSON.stringify(message).substring(0, 500));
 
     // Handle setup complete
     if (message.setupComplete) {
@@ -410,10 +445,8 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
     if (message.serverContent) {
       // 割り込みがあった場合
       if (this.isInterrupted) {
-        console.log('Gemini: Message received while interrupted, checking for turnComplete');
         if (message.serverContent.turnComplete) {
           // ターン完了で割り込みフラグをリセット
-          console.log('Gemini: Resetting interrupt flag on turnComplete');
           this.isInterrupted = false;
           this.emit('turnComplete');
         }
@@ -425,12 +458,10 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
         if (parts) {
           for (const part of parts) {
             if (part.inlineData) {
-              // Audio data
-              console.log('Received audio data, size:', part.inlineData.data.length);
+              // Audio data - ログなしで再生
               this.emit('audio', part.inlineData.data);
             }
             if (part.text) {
-              console.log('Received text:', part.text);
               // テキストを蓄積（turnCompleteで確定）
               this.currentAiResponse += part.text;
               this.emit('text', part.text);
@@ -446,18 +477,41 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
         // textフィールドがある場合とない場合の両方に対応
         const transcriptText = typeof transcription === 'string' ? transcription : transcription.text || '';
         if (transcriptText) {
-          // バッファに蓄積（スペースで区切る）
-          this.currentUserInput += (this.currentUserInput ? ' ' : '') + transcriptText;
-          console.log('Input transcription (buffering):', transcriptText);
+          // バッファに蓄積（日本語なのでスペースなしで連結）
+          this.currentUserInput += transcriptText;
           this.emit('inputTranscript', transcriptText);
         }
       }
       
+      // AI音声の認識結果（outputAudioTranscription有効時）
+      if (message.serverContent.outputTranscription) {
+        const transcription = message.serverContent.outputTranscription;
+        const transcriptText = typeof transcription === 'string' ? transcription : transcription.text || '';
+        if (transcriptText) {
+          // AI応答バッファに蓄積
+          this.currentAiResponse += transcriptText;
+        }
+      }
+      
       if (message.serverContent.turnComplete) {
-        console.log('Turn complete');
-        // ユーザー入力とAI応答を確定
+        // ユーザー入力とAI応答を確定（ここでまとめてログ出力）
         this.finalizeUserInput();
         this.finalizeAiResponse();
+        this.turnCount++;
+        
+        // 5ターンごとに会話継続のリマインダーを送信
+        // 長時間会話でシステム指示の効果が薄れるのを防止
+        if (this.turnCount > 0 && this.turnCount % 5 === 0) {
+          console.log(`CallSession: Sending continuation reminder (turn ${this.turnCount})`);
+          // 少し遅延して送信（turnCompleteイベント処理後）
+          setTimeout(() => {
+            this.sendText(
+              '（システムリマインダー：会話を終わらせないでください。「お疲れ様」「良かったですね」「また」「ありがとう」などで終わらせないでください。必ず次の質問をしてください。話題が尽きたら別の話題に切り替えてください。）',
+              false  // 履歴には記録しない
+            );
+          }, 100);
+        }
+        
         this.emit('turnComplete');
       }
     }

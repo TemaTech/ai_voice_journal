@@ -21,95 +21,106 @@ export class GeminiRestService {
    * @param conversationHistory ユーザーとAIの会話履歴（テキスト形式）
    */
   async generateJournal(conversationHistory: string): Promise<JournalData> {
-    const prompt = `あなたは日記作成アシスタントです。以下はAIジャーナルアプリでユーザーとAIが行った会話の記録です。
+    const prompt = `あなたはユーザーの発言を忠実に記録する書記です。
+以下の会話記録を元に、**事実に基づいた日記**を作成してください。
 
 【会話履歴】
 ${conversationHistory}
 
-【タスク】
-上記の会話を元に、**ユーザーの視点で**今日の日記を作成してください。
+【厳守ルール - 創作の禁止】
+1. **ユーザーが発言した内容のみ**を記述してください。
+   - 会話に含まれない感想、情景描写、哲学的考察などは一切追加しないでください。
+   - ×「特になにもなかった。淡々と時間が過ぎていった。」（後者は創作なのでNG）
+   - ○「今日は特になにもなかった。」（これだけで良い）
 
-【重要なルール】
-- 日記は**ユーザー自身が書いたような**一人称視点で作成してください
-- 会話から抽出した具体的な出来事や感情を含めてください
-- AIとの会話自体には言及しないでください（例：「AIに話した」は不可）
-- 自然で親しみやすい文体を使用してください
+2. **長さの調整**:
+   - 会話が短ければ、日記も短くて構いません。無理に文字数を稼がないでください。
+   - 簡潔な事実の記録を優先してください。
 
-【感情の判定基準】
-- happy: 楽しい・嬉しい・良いことがあった
-- sad: 悲しい・落ち込んでいる
-- excited: ワクワク・興奮・意欲的
-- calm: 穏やか・平和・リラックス
-- tired: 疲れた・大変だった
+3. **文体**:
+   - 「だ・である」調で統一してください。
+   - AIとしての返答や、AIの感想は含めないでください。
 
 【出力形式】
-以下のJSON形式のみを返してください。他の説明は一切不要です。
+以下のJSON形式のみを返してください。
 {
-  "title": "日記のタイトル（15文字以内、キャッチーで）",
-  "summary": "日記の本文（100〜150文字、ユーザー視点で）",
-  "emotion": "happy" | "sad" | "excited" | "calm" | "tired"
+  "title": "日記のタイトル（事実に基づく15文字以内）",
+  "summary": "日記の本文（会話に出た事実のみ。余計な修飾語は削除）",
+  "emotion": "happy" | "sad" | "excited" | "calm" | "tired" | "neutral"
 }`;
 
 
-    try {
-      console.log('GeminiRest: Calling API with conversation length:', conversationHistory.length);
-      console.log('GeminiRest: Prompt first 300 chars:', prompt.substring(0, 300));
-      
-      const response = await fetch(`${GEMINI_API_URL}?key=${this.apiKey}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [{ text: prompt }]
+    let lastError: any;
+    
+    // リトライロジック（最大3回）
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`GeminiRest: Generating journal (Attempt ${attempt}/3)...`);
+        
+        const response = await fetch(`${GEMINI_API_URL}?key=${this.apiKey}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [{ text: prompt }]
+              }
+            ],
+            generationConfig: {
+              temperature: 0.3,
+              maxOutputTokens: 500,
             }
-          ],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 500,
-          }
-        }),
-      });
+          }),
+        });
 
-      console.log('GeminiRest: API response status:', response.status);
-      
-      if (!response.ok) {
-        const error = await response.text();
-        console.error('GeminiRest: API error response:', error);
-        throw new Error(`API error: ${response.status}`);
+        console.log('GeminiRest: API response status:', response.status);
+        
+        if (!response.ok) {
+           // 4xxエラーはリトライしない（クライアントエラーのため）
+           if (response.status >= 400 && response.status < 500) {
+             const errorText = await response.text();
+             throw new Error(`API Client Error (${response.status}): ${errorText}`);
+           }
+           throw new Error(`API Server Error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        
+        if (!textResponse) {
+          throw new Error('No text response from API');
+        }
+
+        // JSONを抽出してパース
+        const jsonMatch = textResponse.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          throw new Error('No JSON found in response');
+        }
+
+        const journal = JSON.parse(jsonMatch[0]);
+        return {
+          title: journal.title || '今日の日記',
+          summary: journal.summary || '（要約なし）',
+          emotion: journal.emotion || 'neutral',
+        };
+
+      } catch (error) {
+        console.warn(`GeminiRest: Attempt ${attempt} failed:`, error);
+        lastError = error;
+        
+        if (attempt < 3) {
+          // 指数バックオフ (1s, 2s)
+          const delay = Math.pow(2, attempt - 1) * 1000;
+          console.log(`GeminiRest: Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
       }
-
-      const data = await response.json();
-      console.log('GeminiRest: API response data keys:', Object.keys(data));
-      
-      const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      
-      if (!textResponse) {
-        console.error('GeminiRest: No text in response, data:', JSON.stringify(data).substring(0, 500));
-        throw new Error('No text response from API');
-      }
-
-      console.log('GeminiRest: Raw text response:', textResponse);
-
-      // JSONを抽出してパース
-      const jsonMatch = textResponse.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        console.error('GeminiRest: No JSON found in response:', textResponse);
-        throw new Error('No JSON found in response');
-      }
-
-      const journal = JSON.parse(jsonMatch[0]);
-      return {
-        title: journal.title || '今日の日記',
-        summary: journal.summary || '（要約なし）',
-        emotion: journal.emotion || 'neutral',
-      };
-    } catch (error) {
-      console.error('Failed to generate journal via REST API:', error);
-      throw error;
     }
+
+    console.error('GeminiRest: All attempts failed');
+    throw lastError;
   }
 
   /**

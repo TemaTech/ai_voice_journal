@@ -2,32 +2,36 @@
 // 通話画面 - 「画面」ではなく「通話セッション」として設計
 // 状態マシン（CallState）に基づくUI表示と割り込み対応
 
+import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Image, Text, TouchableOpacity, View } from 'react-native';
+import {
+  Text,
+  TouchableOpacity,
+  View
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { JournalEditorModal } from '../components/JournalEditorModal';
+import { VoiceVisualizer } from '../components/ui/VoiceVisualizer';
 import { useCallSession } from '../hooks/useCallSession';
-import { StorageService } from '../services/storage';
+import { JournalEntry, StorageService } from '../services/storage';
 import { CallState } from '../types/callSession';
-
-// Assets
-const CHARACTER_DEFAULT = require('../assets/images/character_default.png');
-const CHARACTER_SPEAKING = require('../assets/images/character_speaking.png');
 
 export default function TalkScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const isOnboarding = params.mode === 'onboarding';
 
-  // アニメーション
-  const [waveAnim] = useState(new Animated.Value(1));
-  const [pulseAnim] = useState(new Animated.Value(1));
-  const waveAnimRef = useRef<Animated.CompositeAnimation | null>(null);
-  const pulseAnimRef = useRef<Animated.CompositeAnimation | null>(null);
-
   // ジャーナル生成中フラグ
   const [isGenerating, setIsGenerating] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('日記を書いています...');
+  
+  // 編集用ステート
+  const [editingJournal, setEditingJournal] = useState<JournalEntry | null>(null);
+
+  // 通話時間ステート
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   // 通話セッション（中核フック）
   const systemInstruction = isOnboarding 
@@ -51,6 +55,8 @@ export default function TalkScreen() {
     isConnected,
     isAiTalking,
     isUserTalking,
+    isMuted,
+    toggleMute,
     errorMessage,
     connect,
     disconnect,
@@ -86,71 +92,36 @@ export default function TalkScreen() {
     };
   }, []);
 
-  // 波形アニメーション（AI発話中）
+  // タイマー処理
   useEffect(() => {
-    if (isAiTalking) {
-      // AIが話している時はピンク色のパルス
-      if (waveAnimRef.current) {
-        waveAnimRef.current.stop();
-      }
-      waveAnimRef.current = Animated.loop(
-        Animated.sequence([
-          Animated.timing(waveAnim, {
-            toValue: 1.3,
-            duration: 600,
-            useNativeDriver: true,
-          }),
-          Animated.timing(waveAnim, {
-            toValue: 1,
-            duration: 600,
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      waveAnimRef.current.start();
-    } else {
-      if (waveAnimRef.current) {
-        waveAnimRef.current.stop();
-      }
-      waveAnim.setValue(1);
+    let interval: number;
+    if (isConnected) {
+      interval = window.setInterval(() => {
+        setElapsedSeconds(prev => prev + 1);
+      }, 1000);
     }
-  }, [isAiTalking]);
+    return () => {
+      if (interval) window.clearInterval(interval);
+    };
+  }, [isConnected]);
 
-  // パルスアニメーション（リスニング中/ユーザー発話中）
-  useEffect(() => {
-    if (isConnected && !isAiTalking) {
-      if (pulseAnimRef.current) {
-        pulseAnimRef.current.stop();
-      }
-      const scale = isUserTalking ? 1.4 : 1.2;
-      const duration = isUserTalking ? 400 : 1000;
-      
-      pulseAnimRef.current = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: scale,
-            duration: duration,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: duration,
-            useNativeDriver: true,
-          }),
-        ])
-      );
-      pulseAnimRef.current.start();
-    } else {
-      if (pulseAnimRef.current) {
-        pulseAnimRef.current.stop();
-      }
-      pulseAnim.setValue(1);
-    }
-  }, [isConnected, isAiTalking, isUserTalking]);
+  // 時間フォーマット関数 (MM:SS)
+  const formatTime = (totalSeconds: number) => {
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  };
 
-  // 通話終了処理
-  const handleClose = async () => {
-    console.log('TalkScreen: handleClose started, isGenerating:', isGenerating);
+  // キャンセル処理（会話を破棄して終了）
+  const handleCancel = () => {
+    console.log('TalkScreen: Cancelling conversation');
+    disconnect();
+    router.back();
+  };
+
+  // 完了処理（会話終了・日記生成）
+  const handleFinish = async () => {
+    console.log('TalkScreen: handleFinish started, isGenerating:', isGenerating);
     if (isGenerating) return;
 
     if (isOnboarding) {
@@ -178,6 +149,12 @@ export default function TalkScreen() {
     // 日記生成
     console.log('TalkScreen: Starting journal generation');
     setIsGenerating(true);
+    setLoadingMessage('今日の思い出を振り返っています...');
+    
+    // 演出用タイマー（UX向上のため、段階的にメッセージを変える）
+    const msgTimer1 = setTimeout(() => setLoadingMessage('会話の要点をまとめています...'), 1500);
+    const msgTimer2 = setTimeout(() => setLoadingMessage('素敵なタイトルを考えています...'), 3500);
+    const msgTimer3 = setTimeout(() => setLoadingMessage('日記帳に書き込んでいます...'), 5500);
     
     try {
       console.log('TalkScreen: Calling endConversation...');
@@ -188,77 +165,47 @@ export default function TalkScreen() {
       const now = new Date();
       const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       
-      if (journal) {
-        console.log('TalkScreen: Saving journal to storage...');
-        await StorageService.saveJournalEntry({
-          id: Date.now().toString(),
-          date: today,
-          title: journal.title || '今日の日記',
-          summary: journal.summary || '（要約なし）',
-          emotion: (journal.emotion as any) || 'neutral',
-          createdAt: Date.now()
-        });
-        console.log('TalkScreen: Journal saved successfully:', journal.title);
-      } else {
-        // フォールバック
-        console.log('TalkScreen: No journal returned, using fallback');
-        await StorageService.saveJournalEntry({
-          id: Date.now().toString(),
-          date: today,
-          title: '今日の日記',
-          summary: 'AIと会話しました。',
-          emotion: 'neutral',
-          createdAt: Date.now()
-        });
-      }
-    } catch (e) {
-      console.error('TalkScreen: Failed to generate/save journal', e);
-    } finally {
-      console.log('TalkScreen: Navigating back to home...');
+      const newEntry: JournalEntry = {
+        id: Date.now().toString(),
+        date: today,
+        title: journal?.title || '今日の日記',
+        summary: journal?.summary || '（会話の内容から日記を生成できませんでした）',
+        emotion: (journal?.emotion as any) || 'neutral',
+        createdAt: Date.now()
+      };
+
+      // 生成完了 -> 編集モーダルを表示
+      clearTimeout(msgTimer1);
+      clearTimeout(msgTimer2);
+      clearTimeout(msgTimer3);
       setIsGenerating(false);
+      setEditingJournal(newEntry);
       
-      // 少し待ってからナビゲーション（状態更新が完了するのを待つ）
-      setTimeout(() => {
-        try {
-          router.back();
-        } catch (navError) {
-          console.error('TalkScreen: Navigation error', navError);
-          // バックが失敗した場合はreplaceでホームに戻る
-          try {
-            router.replace('/');
-          } catch (replaceError) {
-            console.error('TalkScreen: Replace navigation also failed', replaceError);
-          }
-        }
-      }, 100);
+    } catch (e) {
+      console.error('TalkScreen: Failed to generate journal', e);
+      clearTimeout(msgTimer1);
+      clearTimeout(msgTimer2);
+      clearTimeout(msgTimer3);
+      setIsGenerating(false);
+      // エラー時は強制的にホームに戻るか、エラーダイアログを出すべきだが、
+      // ここではとりあえずホームに戻す（既存動作維持）
+      router.back();
     }
   };
 
-  // 状態に応じたステータステキスト
-  const getStatusText = (): string => {
-    switch (callState) {
-      case CallState.CONNECTING:
-        return 'Connecting...';
-      case CallState.LISTENING:
-        return 'LISTENING...';
-      case CallState.USER_TALKING:
-        return 'LISTENING...';
-      case CallState.AI_THINKING:
-        return 'THINKING...';
-      case CallState.AI_TALKING:
-        return 'AI SPEAKING...';
-      case CallState.INTERRUPTED:
-        return 'LISTENING...';
-      default:
-        return '';
+  // 編集後の保存処理
+  const handleSaveJournal = async (entry?: JournalEntry) => {
+    const journalToSave = entry || editingJournal;
+    if (!journalToSave) return;
+    
+    try {
+      await StorageService.saveJournalEntry(journalToSave);
+      console.log('TalkScreen: Journal saved successfully');
+      setEditingJournal(null);
+      router.back();
+    } catch (e) {
+      console.error('TalkScreen: Failed to save journal', e);
     }
-  };
-
-  // 背景色（状態に応じて変化）
-  const getBackgroundColor = (): string => {
-    if (isUserTalking) return 'bg-green-400';
-    if (isAiTalking) return 'bg-pink-400';
-    return 'bg-indigo-400';
   };
 
   return (
@@ -266,94 +213,128 @@ export default function TalkScreen() {
       {/* Loading Overlay */}
       {isGenerating && (
         <View className="absolute z-50 w-full h-full bg-black/60 items-center justify-center">
-          <View className="bg-white p-6 rounded-2xl items-center">
-            <Text className="text-lg font-bold text-slate-800 mb-2">日記を書いています...</Text>
-            <Text className="text-sm text-slate-500">今日の思い出をまとめています</Text>
+          <View className="bg-white p-6 rounded-2xl items-center shadow-2xl w-64">
+             <View className="mb-4">
+                <Text className="text-4xl">✨</Text>
+             </View>
+            <Text className="text-lg font-bold text-slate-800 mb-2 text-center">AIが執筆中</Text>
+            <Text className="text-sm text-slate-500 text-center leading-5">{loadingMessage}</Text>
           </View>
         </View>
       )}
 
       <LinearGradient
-        colors={['#312e81', '#4338ca', '#6366f1']}
+        colors={['#1e1b4b', '#312e81', '#4c1d95']} // Deep Midnight Blue -> Indigo -> Deep Purple
         className="absolute w-full h-full"
       />
       
-      <SafeAreaView className="flex-1">
-        {/* Header */}
-        <View className="flex-row items-center justify-between px-6 pt-8 pb-4">
-          <TouchableOpacity 
-            onPress={handleClose} 
-            disabled={isGenerating}
-            className="w-12 h-12 items-center justify-center rounded-full bg-black/30"
-          >
-            <Text className="text-white text-2xl font-bold">{isOnboarding ? '✓' : '×'}</Text>
-          </TouchableOpacity>
-          <View className="px-3 py-1 rounded-full bg-white/10">
-            <Text className="text-white font-medium text-xs">AI VOICE JOURNAL</Text>
+      <SafeAreaView className="flex-1 relative" edges={['bottom']}>
+        {/* Top Controls */}
+        <View 
+          className="w-full flex-row items-center justify-between px-6 z-40"
+          style={{ paddingTop: 60 }} // Manual padding for Status Bar / Dynamic Island
+        >
+           {/* Cancel Button (Top Left) */}
+           <TouchableOpacity 
+             onPress={handleCancel}
+             disabled={isGenerating}
+             className="w-10 h-10 rounded-full bg-white/10 items-center justify-center backdrop-blur-md active:bg-white/20"
+           >
+             <Ionicons name="close" size={24} color="white" />
+           </TouchableOpacity>
+
+           {/* Timer Section (Top Center) */}
+           <View className="items-center">
+             <Text className="text-blue-400 font-bold text-[10px] tracking-widest uppercase mb-1">LIVE SESSION</Text>
+             <Text className="text-white text-2xl font-semibold tracking-wider font-mono">
+               {formatTime(elapsedSeconds)}
+             </Text>
+           </View>
+           
+           {/* Spacer to balance layout */}
+           <View className="w-10" />
+        </View>
+
+        {/* Main Content: Visualizer */}
+        <View className="flex-1 items-center justify-center mb-20">
+          <VoiceVisualizer 
+            state={
+              callState === CallState.CONNECTING ? 'connecting' :
+              callState === CallState.AI_THINKING ? 'aiThinking' :
+              isAiTalking ? 'aiTalking' :
+              isUserTalking ? 'userTalking' :
+              'listening'
+            }
+          />
+          
+          {/* Status Text (Below Visualizer) */}
+          <View className="mt-12 items-center">
+             <Text className="text-white/90 text-xl font-medium text-center leading-8 shadow-sm">
+               {isAiTalking ? '話しています...' :
+                isUserTalking ? '聞いています...' :
+                callState === CallState.CONNECTING ? '接続中...' :
+                callState === CallState.AI_THINKING ? '考え中...' :
+                isMuted ? 'マイクオフ' :
+                'お話しください'}
+             </Text>
+             {!isAiTalking && !isUserTalking && !isMuted && (
+                <Text className="text-white/40 text-sm mt-2 font-light">
+                   いつでも話しかけてください
+                </Text>
+             )}
           </View>
         </View>
 
-        {/* Character Display */}
-        <View className="flex-1 items-center justify-center -mt-20">
-          {/* Wave Effect Background (AI Speaking) */}
-          {isAiTalking && (
-            <Animated.View 
-              style={{ 
-                transform: [{ scale: waveAnim }],
-                opacity: 0.4
-              }}
-              className="absolute w-72 h-72 rounded-full blur-3xl bg-pink-400"
-            />
-          )}
-          
-          {/* Pulse Effect Background (Listening/User Talking) */}
-          {(isConnected && !isAiTalking) && (
-            <Animated.View 
-              style={{ 
-                transform: [{ scale: pulseAnim }],
-                opacity: 0.3
-              }}
-              className={`absolute w-72 h-72 rounded-full blur-3xl ${isUserTalking ? 'bg-green-400' : 'bg-indigo-400'}`}
-            />
-          )}
-          
-          <Image 
-            source={isAiTalking ? CHARACTER_SPEAKING : CHARACTER_DEFAULT}
-            className="w-80 h-80"
-            resizeMode="contain"
-          />
+        {/* Bottom Control Bar */}
+        <View className="absolute bottom-12 w-full flex-row items-center justify-between px-8">
+           {/* Mute Button (Bottom Left) */}
+           <TouchableOpacity 
+             onPress={toggleMute}
+             className={`w-14 h-14 rounded-full items-center justify-center backdrop-blur-md transition-all ${
+               isMuted ? 'bg-white text-indigo-900' : 'bg-white/10 text-white'
+             }`}
+           >
+             <Ionicons 
+               name={isMuted ? "mic-off" : "mic"} 
+               size={24} 
+               color={isMuted ? "#312e81" : "white"} 
+             />
+           </TouchableOpacity>
+
+           {/* Finish Button (Bottom Right/Center) */}
+           <TouchableOpacity 
+             onPress={handleFinish} 
+             disabled={isGenerating}
+             className="flex-1 ml-6 h-14 bg-blue-500 rounded-full flex-row items-center justify-center shadow-lg shadow-blue-900/40 active:bg-blue-600"
+           >
+             <Text className="text-white font-bold text-lg">会話を終了</Text>
+           </TouchableOpacity>
         </View>
 
-        {/* Status Indicator */}
-        <View className="items-center mb-16 h-20">
-          {errorMessage ? (
-            <Text className="text-red-300 font-medium">{errorMessage}</Text>
-          ) : (
-            <>
-              <Text className="text-white/80 font-medium tracking-widest text-sm mb-4">
-                {getStatusText()}
-              </Text>
-              
-              {/* Visual Waveform */}
-              <View className="flex-row items-center space-x-1 h-8">
-                {[...Array(5)].map((_, i) => (
-                  <View 
-                    key={i} 
-                    className={`w-1 bg-white/80 rounded-full transition-all duration-300 ${
-                      isAiTalking 
-                        ? 'h-8 animate-bounce' 
-                        : isUserTalking
-                          ? 'h-6'
-                          : 'h-2'
-                    }`} 
-                  />
-                ))}
-              </View>
-            </>
-          )}
-        </View>
+        {/* Error Message Toast */}
+        {errorMessage && (
+          <View className="absolute top-32 w-full items-center px-6">
+            <View className="px-4 py-3 rounded-xl bg-red-500/90 backdrop-blur-md shadow-lg">
+              <Text className="text-white font-medium text-center">{errorMessage}</Text>
+            </View>
+          </View>
+        )}
 
       </SafeAreaView>
+
+      {/* Edit Journal Modal */}
+      <JournalEditorModal 
+         visible={editingJournal !== null}
+         initialEntry={editingJournal}
+         onSave={(updatedEntry) => {
+           setEditingJournal(updatedEntry);
+           handleSaveJournal(updatedEntry);
+         }}
+         onCancel={() => {
+           setEditingJournal(null);
+           router.back();
+         }}
+      />
     </View>
   );
 }

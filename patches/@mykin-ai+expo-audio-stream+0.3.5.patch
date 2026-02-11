@@ -1,0 +1,168 @@
+diff --git a/node_modules/@mykin-ai/expo-audio-stream/ios/SoundPlayer.swift b/node_modules/@mykin-ai/expo-audio-stream/ios/SoundPlayer.swift
+index d80a28f..65483d5 100644
+--- a/node_modules/@mykin-ai/expo-audio-stream/ios/SoundPlayer.swift
++++ b/node_modules/@mykin-ai/expo-audio-stream/ios/SoundPlayer.swift
+@@ -3,8 +3,8 @@ import ExpoModulesCore
+ 
+ class SoundPlayer {
+     weak var delegate: SoundPlayerDelegate?
+-    private var audioEngine: AVAudioEngine!
+-    private var audioPlayerNode: AVAudioPlayerNode!
++    private var audioEngine: AVAudioEngine?
++    private var audioPlayerNode: AVAudioPlayerNode?
+     
+     private var audioPlayer: AVAudioPlayer?
+     
+@@ -80,8 +80,10 @@ class SoundPlayer {
+             Logger.debug("[SoundPlayer] Destroying audio node, player is playing, stopping it")
+             playerNode.stop()
+         }
+-        self.audioEngine.disconnectNodeOutput(playerNode)
+-        self.audioEngine.detach(playerNode)
++        if let engine = self.audioEngine {
++            engine.disconnectNodeOutput(playerNode)
++            engine.detach(playerNode)
++        }
+ 
+         // Set to nil, ARC deallocates it if no other references exist
+         self.audioPlayerNode = nil
+@@ -229,22 +231,25 @@ class SoundPlayer {
+         self.audioEngine = AVAudioEngine()
+                     
+         audioPlayerNode = AVAudioPlayerNode()
+-        if let playerNode = self.audioPlayerNode {
+-            audioEngine.attach(playerNode)
+-            audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: self.audioPlaybackFormat)
+-            audioEngine.connect(audioEngine.mainMixerNode, to: audioEngine.outputNode, format: self.audioPlaybackFormat)
++        if let playerNode = self.audioPlayerNode, let engine = self.audioEngine {
++            engine.attach(playerNode)
++            engine.connect(playerNode, to: engine.mainMixerNode, format: self.audioPlaybackFormat)
++            engine.connect(engine.mainMixerNode, to: engine.outputNode, format: self.audioPlaybackFormat)
+             
+             // Only enable voice processing immediately for conversation mode
+             // For voice processing mode, we'll enable it only during actual playback
+             if config.playbackMode == .conversation {
+-                try audioEngine.inputNode.setVoiceProcessingEnabled(true)
+-                try audioEngine.outputNode.setVoiceProcessingEnabled(true)
++                try engine.inputNode.setVoiceProcessingEnabled(true)
++                try engine.outputNode.setVoiceProcessingEnabled(true)
+                 Logger.debug("[SoundPlayer] Voice processing immediately enabled for conversation mode (stays disabled for regular mode, and enables only during playback for voice processing mode)")
+             }
+         }
+         self.isAudioEngineIsSetup = true
+         
+-        try self.audioEngine.start()
++        guard let engine = self.audioEngine else {
++            throw SoundPlayerError.unsupportedFormat // エンジンがnilの場合のエラー
++        }
++        try engine.start()
+     }
+     
+     /// Clears all pending audio chunks from the playback queue
+@@ -279,31 +284,23 @@ class SoundPlayer {
+     func stop(_ promise: Promise) {
+         Logger.debug("[SoundPlayer] Stopping Audio")
+         
+-        // Stop the audio player node first (can be done outside the queue)
+-        if self.audioPlayerNode != nil && self.audioPlayerNode.isPlaying {
+-            Logger.debug("[SoundPlayer] Player is playing stopping")
+-            self.audioPlayerNode.pause()
+-            self.audioPlayerNode.stop()
+-        } else {
+-            Logger.debug("Player is not playing")
+-        }
+-        
+-        // Stop the engine and disable voice processing if in voice processing mode
+-        if config.playbackMode == .voiceProcessing {
+-            if let engine = self.audioEngine, engine.isRunning {
+-                engine.stop()
+-                try? self.disableVoiceProcessing()
+-                self.isAudioEngineIsSetup = false
+-            }
+-        }
+-        
+-        // Clear queue and reset segment count on bufferAccessQueue for thread safety
++        // すべてのaudioPlayerNode操作をbufferAccessQueue上で行い、
++        // playNextInQueue()とのスレッド競合を防止
+         self.bufferAccessQueue.async { [weak self] in
+             guard let self = self else {
+                 promise.resolve(nil)
+                 return
+             }
+             
++            // audioPlayerNodeの停止（オプショナルバインディングで安全にアクセス）
++            if let playerNode = self.audioPlayerNode, playerNode.isPlaying {
++                Logger.debug("[SoundPlayer] Player is playing stopping")
++                playerNode.pause()
++                playerNode.stop()
++            } else {
++                Logger.debug("Player is not playing")
++            }
++            
+             // Cancel any pending final signal
+             self.pendingFinalWorkItem?.cancel()
+             self.pendingFinalWorkItem = nil
+@@ -313,6 +310,17 @@ class SoundPlayer {
+                 self.audioQueue.removeAll()
+             }
+             self.segmentsLeftToPlay = 0
++            
++            // Stop the engine and disable voice processing if in voice processing mode
++            // メインスレッドで実行する必要がある場合がある
++            if self.config.playbackMode == .voiceProcessing {
++                if let engine = self.audioEngine, engine.isRunning {
++                    engine.stop()
++                    try? self.disableVoiceProcessing()
++                    self.isAudioEngineIsSetup = false
++                }
++            }
++            
+             promise.resolve(nil)
+         }
+     }
+@@ -527,10 +535,34 @@ class SoundPlayer {
+             return
+         }
+         
++        // 割り込みチェック（キューが残っていても、割り込みが入っていたら再生しない）
++        guard !self.isInterrupted else {
++            Logger.debug("[SoundPlayer] Interrupted, clearing remaining queue")
++            // 残りのPromiseをすべてresolve
++            for (_, promise, _) in self.audioQueue {
++                DispatchQueue.main.async { promise(nil) }
++            }
++            self.audioQueue.removeAll()
++            self.segmentsLeftToPlay = 0
++            return
++        }
++        
++        // audioPlayerNodeのnilチェック（割り込みによるstop()でnilになっている場合がある）
++        guard let playerNode = self.audioPlayerNode else {
++            Logger.debug("[SoundPlayer] audioPlayerNode is nil, cannot play")
++            // 残りのPromiseをすべてresolve
++            for (_, promise, _) in self.audioQueue {
++                DispatchQueue.main.async { promise(nil) }
++            }
++            self.audioQueue.removeAll()
++            self.segmentsLeftToPlay = 0
++            return
++        }
++          
+         // Start the audio player node if it's not already playing
+-        if !self.audioPlayerNode.isPlaying {
++        if !playerNode.isPlaying {
+             Logger.debug("[SoundPlayer] Starting Player")
+-            self.audioPlayerNode.play()
++            playerNode.play()
+         }
+         
+         // Get the first buffer tuple from the queue (buffer, promise, turnId)
+@@ -539,7 +571,7 @@ class SoundPlayer {
+             self.audioQueue.removeFirst()
+ 
+             // Schedule the buffer for playback with a completion handler
+-            self.audioPlayerNode.scheduleBuffer(buffer) { [weak self] in
++            playerNode.scheduleBuffer(buffer) { [weak self] in
+                 guard let self = self else {
+                     promise(nil)
+                     return
