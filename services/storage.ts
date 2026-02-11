@@ -23,6 +23,7 @@ export interface UserSettings {
   notificationTime: string; // "HH:mm"
   // Theme
   theme: 'system' | 'light' | 'dark';
+  themeColor: 'indigo' | 'blue' | 'pink' | 'teal' | 'orange';
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -36,6 +37,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   notificationEnabled: false,
   notificationTime: '21:00',
   theme: 'system',
+  themeColor: 'indigo',
 };
 
 export interface JournalEntry {

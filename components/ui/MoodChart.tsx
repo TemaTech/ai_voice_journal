@@ -28,7 +28,7 @@ const EMOTION_LABELS: Record<string, string> = {
 };
 
 export function MoodChart({ entries }: MoodChartProps) {
-  const { isDark } = useTheme();
+  const { isDark, activeColors } = useTheme();
 
   const chartData = useMemo(() => {
     // 1. Filter last 7 days including today
@@ -130,11 +130,11 @@ export function MoodChart({ entries }: MoodChartProps) {
 
       <LineChart
         data={chartData}
-        color={isDark ? '#818cf8' : '#6366f1'}
+        color={activeColors.primary}
         thickness={3}
-        dataPointsColor={isDark ? '#818cf8' : '#6366f1'}
-        startFillColor={isDark ? '#818cf8' : '#6366f1'}
-        endFillColor={isDark ? '#818cf8' : '#6366f1'}
+        dataPointsColor={activeColors.primary}
+        startFillColor={activeColors.primary}
+        endFillColor={activeColors.primary}
         startOpacity={0.2}
         endOpacity={0.05}
         areaChart

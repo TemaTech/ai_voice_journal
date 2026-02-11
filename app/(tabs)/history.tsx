@@ -38,7 +38,7 @@ const EMOTION_ICONS: Record<string, string> = {
 };
 
 export default function HistoryScreen() {
-  const { isDark } = useTheme();
+  const { isDark, activeColors } = useTheme();
   const [allEntries, setAllEntries] = useState<JournalEntry[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -184,7 +184,7 @@ export default function HistoryScreen() {
 
         {/* Categories (Visual only for now) */}
         <View className="px-6 flex-row gap-6 mb-4 pb-2" style={{ borderBottomWidth: 1, borderBottomColor: isDark ? '#334155' : '#E2E8F0' }}>
-            <TouchableOpacity><ZenText className="text-indigo-600 font-bold border-b-2 border-indigo-600 pb-1">すべて</ZenText></TouchableOpacity>
+            <TouchableOpacity><ZenText className="font-bold border-b-2 pb-1" style={{ color: activeColors.primary, borderColor: activeColors.primary }}>すべて</ZenText></TouchableOpacity>
             <TouchableOpacity><ZenText className="text-slate-400 font-medium">ムード</ZenText></TouchableOpacity>
             <TouchableOpacity><ZenText className="text-slate-400 font-medium">お気に入り</ZenText></TouchableOpacity>
         </View>
@@ -214,7 +214,7 @@ export default function HistoryScreen() {
                             backgroundColor: isDark ? '#334155' : '#F1F5F9',
                             borderColor: isDark ? '#475569' : '#E2E8F0'
                         }}>
-                            <Ionicons name="mic" size={12} color={isDark ? "#94A3B8" : "#64748B"} />
+                            <Ionicons name="mic" size={12} color={activeColors.primary} />
                         </View>
 
                         {/* Time Label */}

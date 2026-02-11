@@ -4,6 +4,15 @@ import { Appearance, InteractionManager } from 'react-native';
 import { StorageService } from '../services/storage';
 
 type Theme = 'light' | 'dark' | 'system';
+export type ThemeColor = 'indigo' | 'blue' | 'pink' | 'teal' | 'orange';
+
+export const THEME_COLORS: Record<ThemeColor, { primary: string; light: string; dark: string }> = {
+    indigo: { primary: '#6366F1', light: '#818CF8', dark: '#4F46E5' },
+    blue:   { primary: '#3B82F6', light: '#60A5FA', dark: '#2563EB' },
+    pink:   { primary: '#EC4899', light: '#F472B6', dark: '#DB2777' },
+    teal:   { primary: '#14B8A6', light: '#2DD4BF', dark: '#0D9488' },
+    orange: { primary: '#F97316', light: '#FB923C', dark: '#EA580C' },
+};
 
 interface ThemeContextType {
   /** ユーザーが選択したテーマ設定 ('light' | 'dark' | 'system') */
@@ -12,6 +21,13 @@ interface ThemeContextType {
   changeTheme: (theme: Theme) => Promise<void>;
   /** 現在ダークモードかどうか */
   isDark: boolean;
+  
+  /** ユーザーが選択したテーマカラー */
+  themeColor: ThemeColor;
+  /** テーマカラーを変更する関数 */
+  changeThemeColor: (color: ThemeColor) => Promise<void>;
+  /** 現在のテーマカラーのカラーコード定義 */
+  activeColors: { primary: string; light: string; dark: string };
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -19,6 +35,7 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
   const { colorScheme } = useNativeWindColorScheme();
   const [themePreference, setThemePreference] = useState<Theme>('system');
+  const [themeColor, setThemeColor] = useState<ThemeColor>('indigo');
 
   // アプリ起動時に保存されたテーマ設定を読み込む
   useEffect(() => {
@@ -26,11 +43,14 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
       try {
         const settings = await StorageService.getUserSettings();
         const savedTheme = settings.theme || 'system';
+        const savedColor = settings.themeColor || 'indigo';
+        
         setThemePreference(savedTheme);
+        setThemeColor(savedColor as ThemeColor);
+
         // React NativeのAppearance APIを使用してシステムレベルでテーマを設定
-        // NativeWindはこれを自動的に検知する
         if (savedTheme === 'system') {
-          Appearance.setColorScheme(null); // システムのデフォルトに従う
+          Appearance.setColorScheme(null);
         } else {
           Appearance.setColorScheme(savedTheme);
         }
@@ -43,12 +63,9 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
 
   const changeTheme = async (newTheme: Theme) => {
     try {
-      // まずユーザー設定を保存
       setThemePreference(newTheme);
       await StorageService.saveUserSettings({ theme: newTheme });
 
-      // InteractionManager で現在のインタラクションが完了してから
-      // Appearance API でテーマを適用する（ナビゲーションコンテキストとの競合を回避）
       InteractionManager.runAfterInteractions(() => {
         if (newTheme === 'system') {
           Appearance.setColorScheme(null);
@@ -61,10 +78,27 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
+  const changeThemeColor = async (newColor: ThemeColor) => {
+      try {
+          setThemeColor(newColor);
+          await StorageService.saveUserSettings({ themeColor: newColor });
+      } catch (error) {
+          console.error('テーマカラーの保存に失敗:', error);
+      }
+  };
+
   const isDark = colorScheme === 'dark';
+  const activeColors = THEME_COLORS[themeColor];
 
   return (
-    <ThemeContext.Provider value={{ theme: themePreference, changeTheme, isDark }}>
+    <ThemeContext.Provider value={{ 
+        theme: themePreference, 
+        changeTheme, 
+        isDark,
+        themeColor,
+        changeThemeColor,
+        activeColors
+    }}>
       {children}
     </ThemeContext.Provider>
   );
@@ -77,3 +111,4 @@ export const useThemeContext = () => {
   }
   return context;
 };
+

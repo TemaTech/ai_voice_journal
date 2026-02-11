@@ -17,7 +17,7 @@ import { calculateStreak } from '../../utils/date';
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { isDark } = useTheme();
+  const { isDark, activeColors } = useTheme();
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [latestEntry, setLatestEntry] = useState<JournalEntry | null>(null);
   const [entries, setEntries] = useState<JournalEntry[]>([]);
@@ -172,14 +172,13 @@ export default function HomeScreen() {
                         const now = new Date();
                         return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
                       }).length / 1) * 100));
-                    
-                    if (percentage >= 100) {
-                        return <View className="absolute inset-0 rounded-full border-[12px] border-blue-500 opacity-100" style={{ margin: -12 }} />;
+                                        if (percentage >= 100) {
+                        return <View className="absolute inset-0 rounded-full border-[12px] opacity-100" style={{ borderColor: activeColors.primary, margin: -12 }} />;
                     } else if (percentage > 0) {
                         // For partial progress, keep the rotated semi-circle look but maybe adjust
                         // Since exact arc is hard without SVG, let's just stick to the visual the user saw but fix 100% case.
                         return (
-                            <View className="absolute w-48 h-48 rounded-full border-[12px] border-blue-500 border-t-transparent border-l-transparent rotate-45 opacity-100" />
+                            <View className="absolute w-48 h-48 rounded-full border-[12px] border-t-transparent border-l-transparent rotate-45 opacity-100" style={{ borderColor: activeColors.primary }} />
                         );
                     }
                     return null;
@@ -208,7 +207,7 @@ export default function HomeScreen() {
                    router.push('/talk');
                  }}
                  style={{
-                   shadowColor: '#8B5CF6',
+                   shadowColor: activeColors.primary,
                    shadowOffset: { width: 0, height: 8 },
                    shadowOpacity: 0.3,
                    shadowRadius: 16,
@@ -216,7 +215,7 @@ export default function HomeScreen() {
                  }}
                >
                   <LinearGradient
-                     colors={['#8B5CF6', '#7C3AED']}
+                     colors={[activeColors.primary, activeColors.dark]}
                      start={{ x: 0, y: 0 }}
                      end={{ x: 1, y: 1 }}
                      style={{
@@ -241,117 +240,148 @@ export default function HomeScreen() {
                </TouchableOpacity>
           </View>
 
-          {/* Highlight & Recap Section */}
-          <View className="px-6 pb-20">
-             <View className="flex-row items-center gap-2 mb-4">
-                <View className="bg-indigo-100 rounded-full w-6 h-6 items-center justify-center">
-                   <Ionicons name="sparkles" size={14} color="#6366F1" />
-                </View>
-                <ZenHeading level={3} className="text-slate-700 text-lg font-bold">会話のハイライト</ZenHeading>
-             </View>
+          {/* Weekly Insights (Detailed) */}
+          <View className="px-6 pb-4">
+               <View className="flex-row items-center gap-2 mb-4">
+                 <View className="w-6 h-6 rounded-full items-center justify-center" style={{ backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#F3F4F6' }}>
+                    <Ionicons name="analytics" size={14} color={activeColors.primary} />
+                 </View>
+                 <ZenHeading level={3} className="text-slate-700 text-lg font-bold">今週のインサイト</ZenHeading>
+              </View>
 
-             {/* Dynamic Highlight Card */}
-             <View className="rounded-3xl p-5 border shadow-sm mb-4" style={{
-                 backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
-                 borderColor: isDark ? '#334155' : '#EEF2FF'
-             }}>
-                {entries.length > 0 ? (
-                  (() => {
-                    // Pick a random entry or the latest one for now
-                    const highlightEntry = entries.length > 0 ? entries[Math.floor(Math.random() * entries.length)] : null;
-                    if (!highlightEntry) return null;
+              <View className="rounded-3xl p-5 border shadow-sm mb-4 relative overflow-hidden" style={{
+                  backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                  borderColor: isDark ? '#334155' : '#EEF2FF',
+              }}>
+                <LinearGradient
+                    colors={[activeColors.light + '20', 'transparent']} // 20 is hex opacity ~12%
+                    style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 80 }}
+                 />
+                 
+                 {entries.length > 0 ? (
+                    (() => {
+                        const now = new Date();
+                        const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+                        // Filter entries for this week
+                        const weekEntries = entries.filter(e => new Date(e.date) >= startOfWeek);
+                        const count = weekEntries.length;
+                        
+                        // Calculate Top Mood
+                        const moodCounts: Record<string, number> = {};
+                        weekEntries.forEach(e => {
+                            moodCounts[e.emotion] = (moodCounts[e.emotion] || 0) + 1;
+                        });
+                        let topMood = 'neutral';
+                        let maxMoodCount = 0;
+                        Object.entries(moodCounts).forEach(([mood, c]) => {
+                            if (c > maxMoodCount) {
+                                maxMoodCount = c;
+                                topMood = mood;
+                            }
+                        });
 
-                    return (
-                        <>
-                           <View className="flex-row items-center gap-2 mb-2">
-                              <View className="px-3 py-1 rounded-full border" style={{ 
-                                  backgroundColor: isDark ? 'rgba(79, 70, 229, 0.2)' : '#EEF2FF', 
-                                  borderColor: isDark ? 'rgba(99, 102, 241, 0.3)' : '#E0E7FF' 
-                              }}>
-                                <ZenText className="text-[10px] font-bold" style={{ color: isDark ? '#A5B4FC' : '#6366F1' }}>
-                                    {new Date(highlightEntry.date).toLocaleDateString('ja-JP')} の記録
+                        return (
+                            <View>
+                                <View className="flex-row justify-between items-start mb-4">
+                                    <View>
+                                        <ZenText className="text-xs font-bold mb-1" style={{ color: activeColors.primary }}>WEEKLY VIBE</ZenText>
+                                        <ZenHeading level={2} className="text-2xl font-bold capitalize" style={{ color: isDark ? '#FFFFFF' : '#1E293B' }}>
+                                            {count > 0 ? `${topMood}な1週間` : 'まだ記録がありません'}
+                                        </ZenHeading>
+                                    </View>
+                                    <View className="bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-full">
+                                        <ZenText className="text-xs font-bold" style={{ color: isDark ? '#94A3B8' : '#64748B' }}>{count}回の会話</ZenText>
+                                    </View>
+                                </View>
+                                
+                                <ZenText className="text-sm leading-relaxed mb-4" style={{ color: isDark ? '#CBD5E1' : '#64748B' }}>
+                                    {count === 0 ? '今週はまだAIと話していません。\n週末に向けて、少しお話しませんか？' : 
+                                     topMood === 'happy' ? '素晴らしい1週間でしたね！ポジティブなエネルギーが溢れています。' :
+                                     topMood === 'sad' ? '少し落ち込むことがあったようです。無理せずリラックスしてください。' :
+                                     topMood === 'tired' ? 'お疲れのようですね。週末はゆっくり休みましょう。' :
+                                     '落ち着いた1週間を過ごせているようです。この調子でいきましょう。'}
                                 </ZenText>
-                              </View>
-                           </View>
-                           <ZenHeading level={3} className="text-lg font-bold mb-2" style={{ color: isDark ? '#FFFFFF' : '#1E293B' }}>
-                             {highlightEntry.title}
-                           </ZenHeading>
-                           <ZenText className="text-sm leading-relaxed mb-4" style={{ color: isDark ? '#CBD5E1' : '#64748B' }} numberOfLines={3}>
-                             {highlightEntry.summary}
-                           </ZenText>
-                           
-                           <Link href="/(tabs)/history" asChild>
-                               <TouchableOpacity className="self-start">
-                                    <ZenText className="text-indigo-500 font-bold text-sm">振り返る →</ZenText>
-                               </TouchableOpacity>
-                           </Link>
-                        </>
-                    );
-                  })()
-                ) : (
+
+                                <Link href="/(tabs)/calendar" asChild>
+                                   <TouchableOpacity className="flex-row items-center">
+                                        <ZenText className="font-bold text-sm mr-1" style={{ color: activeColors.primary }}>詳しく見る</ZenText>
+                                        <Ionicons name="arrow-forward" size={14} color={activeColors.primary} />
+                                   </TouchableOpacity>
+                                </Link>
+                            </View>
+                        );
+                    })()
+                 ) : (
                     <View className="py-4 items-center">
-                        <ZenText className="text-center" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>まだ会話の記録がありません。</ZenText>
-                        <ZenText className="text-xs text-center mt-1" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>AIと話して思い出を作りましょう。</ZenText>
+                         <ZenText className="text-center mb-2" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>今週のデータがありません</ZenText>
+                         <ZenText className="text-xs text-center" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>AIと話して、あなたの1週間を可視化しましょう。</ZenText>
                     </View>
-                )}
-             </View>
+                 )}
+              </View>
+          </View>
 
-             {/* Weekly Goals (Simplified matches light theme) */}
-             <View className="rounded-3xl p-5 border shadow-sm" style={{
-                 backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
-                 borderColor: isDark ? '#334155' : '#EEF2FF'
-             }}>
-                <View className="flex-row justify-between items-start mb-4">
-                   <View>
-                      <ZenHeading level={3} className="text-base font-bold" style={{ color: isDark ? '#FFFFFF' : '#334155' }}>今週の目標</ZenHeading>
-                      <ZenText className="text-xs" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>7日中 {
-                        (() => {
+          {/* Weekly Goals */}
+          <View className="px-6 pb-20">
+              <View className="rounded-3xl p-5 border shadow-sm" style={{
+                  backgroundColor: isDark ? '#1E293B' : '#FFFFFF',
+                  borderColor: isDark ? '#334155' : '#EEF2FF'
+              }}>
+                 <View className="flex-row justify-between items-start mb-4">
+                    <View>
+                       <ZenHeading level={3} className="text-base font-bold" style={{ color: isDark ? '#FFFFFF' : '#334155' }}>今週の目標</ZenHeading>
+                       <ZenText className="text-xs" style={{ color: isDark ? '#94A3B8' : '#94A3B8' }}>7日中 {
+                         (() => {
+                           const now = new Date();
+                           const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+                           const count = new Set(entries.filter(e => new Date(e.date) >= startOfWeek).map(e => e.date)).size;
+                           return count;
+                         })()
+                       }日 達成</ZenText>
+                    </View>
+                    <View className="flex-row gap-1">
+                       {['日', '月', '火', '水', '木', '金', '土'].map((day, i) => {
                           const now = new Date();
-                          const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
-                          const count = new Set(entries.filter(e => new Date(e.date) >= startOfWeek).map(e => e.date)).size;
-                          return count;
-                        })()
-                      }日 達成</ZenText>
-                   </View>
-                   <View className="flex-row gap-1">
-                      {['日', '月', '火', '水', '木', '金', '土'].map((day, i) => {
-                         const now = new Date();
-                         const dayOfWeek = now.getDay();
-                         const entryDatesThisWeek = new Set(entries.filter(e => {
-                            const entryDate = new Date(e.date);
-                            const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek);
-                            return entryDate >= startOfWeek;
-                         }).map(e => e.date));
+                          const dayOfWeek = now.getDay();
+                          const entryDatesThisWeek = new Set(entries.filter(e => {
+                             const entryDate = new Date(e.date);
+                             const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek);
+                             return entryDate >= startOfWeek;
+                          }).map(e => e.date));
 
-                         const checkDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (dayOfWeek - i));
-                         const isTalked = entryDatesThisWeek.has(`${checkDate.getFullYear()}-${String(checkDate.getMonth() + 1).padStart(2, '0')}-${String(checkDate.getDate()).padStart(2, '0')}`);
-                         const isFuture = checkDate > now;
+                          const checkDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (dayOfWeek - i));
+                          const checkDateStr = `${checkDate.getFullYear()}-${String(checkDate.getMonth() + 1).padStart(2, '0')}-${String(checkDate.getDate()).padStart(2, '0')}`;
+                          const isTalked = entryDatesThisWeek.has(checkDateStr);
+                          const isFuture = checkDate > now;
 
-                         return (
-                           <View key={day} className={`w-6 h-6 rounded-full items-center justify-center ${isTalked ? 'bg-indigo-500' : ''}`} style={
-                               !isTalked ? { backgroundColor: isFuture ? (isDark ? '#334155' : '#F1F5F9') : (isDark ? '#475569' : '#E2E8F0') } : undefined
-                           }>
-                              <ZenText className={`text-[10px] font-bold ${isTalked ? 'text-white' : ''}`} style={
-                                  !isTalked ? { color: isDark ? '#94A3B8' : '#94A3B8' } : undefined
-                              }>{day}</ZenText>
-                           </View>
-                         );
-                      })}
-                   </View>
-                </View>
-                
-                {/* Progress Bar */}
-                <View className="h-3 rounded-full overflow-hidden w-full" style={{ backgroundColor: isDark ? '#334155' : '#F1F5F9' }}>
-                   <View className="h-full bg-indigo-500 rounded-full" style={{ width: `${Math.min(100, (
-                        (() => {
-                          const now = new Date();
-                          const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
-                          const count = new Set(entries.filter(e => new Date(e.date) >= startOfWeek).map(e => e.date)).size;
-                          return (count / 7) * 100;
-                        })()
-                   ))}%` }} />
-                </View>
-             </View>
+                          return (
+                            <View key={day} className={`w-6 h-6 rounded-full items-center justify-center`} style={
+                                isTalked 
+                                 ? { backgroundColor: activeColors.primary } 
+                                 : { backgroundColor: isFuture ? (isDark ? '#334155' : '#F1F5F9') : (isDark ? '#475569' : '#E2E8F0') }
+                            }>
+                               <ZenText className={`text-[10px] font-bold ${isTalked ? 'text-white' : ''}`} style={
+                                   !isTalked ? { color: isDark ? '#94A3B8' : '#94A3B8' } : undefined
+                               }>{day}</ZenText>
+                            </View>
+                          );
+                       })}
+                    </View>
+                 </View>
+                 
+                 {/* Progress Bar */}
+                 <View className="h-3 rounded-full overflow-hidden w-full" style={{ backgroundColor: isDark ? '#334155' : '#F1F5F9' }}>
+                    <View className="h-full rounded-full" style={{ 
+                        backgroundColor: activeColors.primary,
+                        width: `${Math.min(100, (
+                         (() => {
+                           const now = new Date();
+                           const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay());
+                           const count = new Set(entries.filter(e => new Date(e.date) >= startOfWeek).map(e => e.date)).size;
+                           return (count / 7) * 100;
+                         })()
+                    ))}%` }} />
+                 </View>
+              </View>
           </View>
         </ScrollView>
       </SafeAreaView>

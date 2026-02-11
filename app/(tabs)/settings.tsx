@@ -9,13 +9,14 @@ import { Alert, ScrollView, Switch, TouchableOpacity, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BentoCard } from '../../components/ui/BentoCard';
 import { ZenHeading, ZenText } from '../../components/ui/Typography';
+import { THEME_COLORS, ThemeColor } from '../../context/ThemeContext';
 import { useTheme } from '../../hooks/useTheme';
 import { NotificationService } from '../../services/notification';
 import { StorageService, UserSettings } from '../../services/storage';
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { theme, changeTheme, isDark } = useTheme();
+  const { theme, changeTheme, isDark, changeThemeColor, activeColors } = useTheme();
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [showTimePicker, setShowTimePicker] = useState(false);
 
@@ -215,11 +216,38 @@ export default function SettingsScreen() {
                   </View>
 
                    <View className="flex-row justify-between items-center py-2">
-                     <ZenText>テーマカラー (Coming Soon)</ZenText>
-                     <View className="flex-row gap-2">
-                        <View className="w-6 h-6 rounded-full bg-indigo-500 border-2 border-white" style={{ shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 }} />
-                        <View className="w-6 h-6 rounded-full bg-pink-400" />
-                        <View className="w-6 h-6 rounded-full bg-teal-400" />
+                     <ZenText>テーマカラー</ZenText>
+                     <View className="flex-row gap-3">
+                        {(Object.keys(THEME_COLORS) as ThemeColor[]).map((color) => {
+                            const colorDef = THEME_COLORS[color];
+                            const isActive = settings?.themeColor === color;
+                            return (
+                                <TouchableOpacity 
+                                    key={color} 
+                                    onPress={async () => {
+                                        await changeThemeColor(color);
+                                        // Update local settings state to reflect change immediately in UI if needed, 
+                                        // though context should handle app-wide changes. 
+                                        // settings state here is for initial load, so we might want to update it.
+                                        const newSettings = await StorageService.getUserSettings();
+                                        setSettings(newSettings);
+                                    }}
+                                    style={{
+                                        width: 24, 
+                                        height: 24, 
+                                        borderRadius: 12, 
+                                        backgroundColor: colorDef.primary,
+                                        borderWidth: 2,
+                                        borderColor: isActive ? (isDark ? '#FFFFFF' : '#1E293B') : 'transparent',
+                                        shadowColor: '#000',
+                                        shadowOffset: { width: 0, height: 1 },
+                                        shadowOpacity: 0.2,
+                                        shadowRadius: 2,
+                                        elevation: 2
+                                    }}
+                                />
+                            );
+                        })}
                      </View>
                   </View>
                </BentoCard>
@@ -232,13 +260,13 @@ export default function SettingsScreen() {
                      <Switch 
                         value={settings?.notificationEnabled ?? false} 
                         onValueChange={toggleNotification}
-                        trackColor={{ false: "#767577", true: "#9D7BFF" }}
+                        trackColor={{ false: "#767577", true: activeColors.light }}
                      />
                   </View>
                   <View className="flex-row justify-between items-center py-2">
                      <ZenText className="text-slate-500 text-sm">通知時間</ZenText>
                      <TouchableOpacity onPress={() => setShowTimePicker(true)}>
-                        <ZenText className="font-bold px-3 py-1 rounded-lg overflow-hidden" style={{ backgroundColor: isDark ? 'rgba(79, 70, 229, 0.2)' : '#EEF2FF', color: isDark ? '#A5B4FC' : '#7C4DFF' }}>
+                        <ZenText className="font-bold px-3 py-1 rounded-lg overflow-hidden" style={{ backgroundColor: isDark ? `${activeColors.primary}33` : `${activeColors.light}33`, color: activeColors.primary }}>
                             {settings?.notificationTime || '21:00'}
                         </ZenText>
                      </TouchableOpacity>
@@ -282,8 +310,8 @@ export default function SettingsScreen() {
                           }}
                           className="px-4 py-2 rounded-full border"
                           style={{ 
-                            backgroundColor: isSelected ? '#6366F1' : (isDark ? 'rgba(255,255,255,0.05)' : '#FFFFFF'),
-                            borderColor: isSelected ? '#6366F1' : (isDark ? '#334155' : '#E2E8F0')
+                            backgroundColor: isSelected ? activeColors.primary : (isDark ? 'rgba(255,255,255,0.05)' : '#FFFFFF'),
+                            borderColor: isSelected ? activeColors.primary : (isDark ? '#334155' : '#E2E8F0')
                           }}
                         >
                           <ZenText className="text-sm font-bold" style={{ color: isSelected ? '#FFFFFF' : (isDark ? '#CBD5E1' : '#475569') }}>{label}</ZenText>

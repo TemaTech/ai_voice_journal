@@ -1,11 +1,22 @@
 import { useThemeContext } from '../context/ThemeContext';
 
 export const useTheme = () => {
-  const { theme, changeTheme, isDark } = useThemeContext();
+  const { 
+    theme, 
+    changeTheme, 
+    isDark,
+    themeColor,
+    changeThemeColor,
+    activeColors
+  } = useThemeContext();
 
   return {
     theme,
     changeTheme,
     isDark,
+    themeColor,
+    changeThemeColor,
+    activeColors
   };
 };
+

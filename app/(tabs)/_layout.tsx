@@ -2,9 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import { useColorScheme } from 'nativewind';
 import { View } from 'react-native';
+import { useTheme } from '../../hooks/useTheme';
 
 export default function TabLayout() {
   const { colorScheme } = useColorScheme();
+  const { activeColors } = useTheme(); // Custom hook that returns active theme colors
   const isDark = colorScheme === 'dark';
 
   return (
@@ -35,7 +37,7 @@ export default function TabLayout() {
             }} 
           />
         ),
-        tabBarActiveTintColor: '#9D7BFF', // Liquid Primary
+        tabBarActiveTintColor: activeColors.primary,
         tabBarInactiveTintColor: '#8E8E93',
         tabBarLabelStyle: {
           fontSize: 10,
