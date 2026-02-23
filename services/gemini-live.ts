@@ -56,6 +56,13 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
   
   // デバッグ用カウンター
   private audioChunkCount: number = 0;
+  
+  // 応答途切れリカバリー用タイマー
+  private incompleteResponseTimer: ReturnType<typeof setTimeout> | null = null;
+  
+  // リカバリー試行回数（無限ループ防止用）
+  private recoveryAttemptCount: number = 0;
+  private static readonly MAX_RECOVERY_ATTEMPTS = 2;
 
   constructor(config: GeminiLiveConfig) {
     super();
@@ -82,6 +89,12 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
     this.currentUserInput = '';  // ユーザー入力バッファもリセット
     this.isInterrupted = false;
     this.turnCount = 0;
+    this.recoveryAttemptCount = 0;
+    
+    if (this.incompleteResponseTimer) {
+      clearTimeout(this.incompleteResponseTimer);
+      this.incompleteResponseTimer = null;
+    }
   }
 
   // 会話ログを取得（日記生成用）
@@ -117,11 +130,49 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
   }
 
   // AIの現在の応答を確定して記録
-  private finalizeAiResponse() {
+  private finalizeAiResponse(wasInterruptedByUser: boolean = false) {
     if (this.currentAiResponse.trim()) {
-      this.recordAiMessage(this.currentAiResponse);
-      // まとめてログ出力
-      console.log('[AI発話]', this.currentAiResponse.substring(0, 100) + (this.currentAiResponse.length > 100 ? '...' : ''));
+      // 英語の短い応答（ハルシネーション）をフィルタリング
+      // 日本語が含まれておらず、かつ短い場合は無視
+      const isJapanese = /[亜-熙ぁ-んァ-ヶ]/.test(this.currentAiResponse);
+      const isShortEnglish = !isJapanese && this.currentAiResponse.length < 20;
+      
+      if (!isShortEnglish) {
+        this.recordAiMessage(this.currentAiResponse);
+        console.log('[AI発話]', this.currentAiResponse.substring(0, 100) + (this.currentAiResponse.length > 100 ? '...' : ''));
+
+        // ★ 途切れ検知ロジック
+        // 文末が句読点や記号で終わっていない場合、「途切れ」とみなす
+        const lastChar = this.currentAiResponse.trim().slice(-1);
+        const validEndings = ['。', '、', '？', '！', '!', '?', '」', ')', '）', '\n'];
+        const isComplete = validEndings.includes(lastChar);
+        
+          if (!isComplete) {
+            if (wasInterruptedByUser) {
+              console.log(`GeminiLive: Incomplete response but user input detected in turn. Skipping recovery.`);
+              // リカバリーせずに終了（ユーザー発話やノイズで中断された場合は、次の展開に委ねる）
+            } else if (this.recoveryAttemptCount < GeminiLiveService.MAX_RECOVERY_ATTEMPTS) {
+              this.recoveryAttemptCount++;
+              console.log(`GeminiLive: Incomplete response detected (Last char: ${lastChar}). Recovery attempt ${this.recoveryAttemptCount}/${GeminiLiveService.MAX_RECOVERY_ATTEMPTS}`);
+              
+              if (this.incompleteResponseTimer) {
+                clearTimeout(this.incompleteResponseTimer);
+              }
+              
+              this.incompleteResponseTimer = setTimeout(() => {
+                 if (this.isReady()) {
+                   // 短い応答を促すシンプルなプロンプト
+                   this.sendText('（指示：途切れました。短く一文で続きを話してください）', false);
+                 }
+                 this.incompleteResponseTimer = null;
+              }, 1000); // 1秒後にリカバリ（シームレスな繋がりのため短めに）
+            } else {
+              console.log('GeminiLive: Incomplete response detected but max recovery attempts reached. Skipping recovery.');
+            }
+          }
+      } else {
+        console.log('[AI発話(無視)]', this.currentAiResponse);
+      }
       this.currentAiResponse = '';
     }
   }
@@ -130,14 +181,28 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
   private finalizeUserInput() {
     if (this.currentUserInput.trim()) {
       const cleanedInput = this.currentUserInput.trim().replace(/\s+/g, ''); // 日本語なのでスペースを完全除去
-      this.recordUserMessage(cleanedInput);
-      // まとめてログ出力
-      console.log('[ユーザー発話]', cleanedInput);
+      
+      // 非日本語ノイズのフィルタリング
+      // 音声認識がノイズをタイ語、韓国語、英語などとして誤認識することがある
+      // 日本語文字（漢字・ひらがな・カタカナ）が1つも含まれていない入力は無視する
+      const containsJapanese = /[亜-熙ぁ-んァ-ヶー\u4E00-\u9FFF\u3400-\u4DBF]/.test(cleanedInput);
+
+      if (containsJapanese) {
+        this.recordUserMessage(cleanedInput);
+        // まとめてログ出力
+        console.log('[ユーザー発話]', cleanedInput);
+        
+        // ★ ユーザーが発話したら、リカバリカウンターをリセット
+        // これにより次のAI応答が途切れた場合は再びリカバリが試行可能になる
+        this.recoveryAttemptCount = 0;
+      } else {
+        console.log('[ユーザー発話(無視)]', cleanedInput);
+      }
       this.currentUserInput = '';
     }
   }
 
-  connect(systemInstructionText?: string) {
+  connect(systemInstructionText?: string, initialHistory: ConversationLog[] = []) {
     const url = `wss://${HOST}${PATH}?key=${this.config.apiKey}`;
     this.ws = new WebSocket(url);
     
@@ -147,6 +212,12 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
     this.ws.onopen = () => {
       console.log('Gemini Live Connected');
       this.sendSetupMessage(systemInstructionText);
+
+      // 履歴がある場合、接続直後に文脈として送信（コンテキスト復元）
+      if (initialHistory.length > 0) {
+        console.log(`Restoring context with ${initialHistory.length} logs...`);
+        this.sendConversationContext(initialHistory);
+      }
     };
 
     this.ws.onmessage = async (event) => {
@@ -164,72 +235,41 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
     };
   }
 
+  // 過去の会話ログを送信してコンテキストを復元
+  private sendConversationContext(history: ConversationLog[]) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    
+    // APIの形式に変換
+    const turns = history.map(log => ({
+      role: log.speaker === 'user' ? 'user' : 'model',
+      parts: [{ text: log.text }]
+    }));
+    
+    const message = {
+      clientContent: {
+        turns: turns,
+        turnComplete: false // 履歴を流し込むだけなのでターンは終了させない
+      }
+    };
+    
+    console.log('Sending conversation context...');
+    this.ws.send(JSON.stringify(message));
+    
+    // 内部ログを初期化（これで日記生成時にも過去のログが含まれる）
+    this.conversationLogs = [...history];
+  }
+
   private sendSetupMessage(instruction?: string) {
     if (!this.ws) return;
     
-    const defaultInstruction = `あなたは日記のための会話相手です。
-ユーザーの今日の出来事や気持ちを、自然に引き出してください。
-
-【最重要ルール】
-・ユーザーが話すことがメイン。あなたは聞き役です。
-・あなたの発話は短く。ユーザーにたくさん話してもらいます。
-・ユーザーが考えている沈黙は大切です。急かさないでください。
-・必ず「です」「ます」調の敬語で話してください。
-
-【会話の継続性：最も重要】
-・絶対に自分から会話を終わらせないでください。会話を終了するのはユーザーが決めます。
-・「今日はありがとう」「いい一日になりますように」「お休みなさい」「じゃあ」「また」等の終了を匹わせる言葉は禁止です。
-・「まとめると」「今日のお話を振り返ると」のような要約も禁止です。
-・必ず毎ターンの終わりに次の質問をしてください。会話が途切れないように。
-・話題が尽きたと感じたら、別の話題に切り替えてください（例：「他に何かありましたか？」「そういえば、プライベートでは何かありましたか？」）。
-
-【発話の形式：完結した文で話す】
-・必ず完結した文で終わらせてください。文の途中で切らないでください。
-・１回の発話は「共感の一言＋質問」の形で、簡潔にまとめてください。
-・共感と質問を別々に分けないでください（１つの発話ブロックでまとめて話す）。
-
-【会話の基本姿勢：選択肢を出して話しやすくする】
-質問するときは、必ず選択肢を添えてください。
-これが一番重要です。選択肢があると答えやすくなります。
-
-✓ 良い例：「お仕事ですか？それともプライベートですか？」
-✓ 良い例：「楽しかったですか？それとも大変でしたか？」
-✓ 良い例：「人間関係ですか？タスクの量ですか？」
-✗ 悪い例：「どうでしたか？」（選択肢なし）
-
-【共感の型：言い換え + 掘り下げ】
-ユーザーの話を聞いたら、以下の順序で反応してください：
-1. まず共感の一言（「それは大変でしたね」「嬉しいですね」）
-2. 相手の言葉を言い換えて確認（「〜ということですか？」）
-3. 選択肢付きの掘り下げ質問
-
-【話し方のルール】
-・1回の発話は1〜2文程度（短く）
-・質問は毎ターン1つまで
-・時々「えー」「あー」「うーん」を入れると自然です
-・語尾は「〜ですね」「〜ですか？」「〜ですよね」
-
-【良い反応の具体例】
-✓「えー、それは大変でしたね。何が一番きつかったですか？」
-✓「あー、なるほど。お仕事ですか？それともプライベートですか？」
-✓「うーん、そうだったんですね。それでどうなりましたか？」
-✓「嬉しいですね！誰かと一緒でしたか？それとも一人でですか？」
-✓「それは気になりますね。具体的にはどんな感じでしたか？」
-
-【避けるべき反応】
-✗ 長い発話（3文以上は話しすぎです）
-✗「そうですか」だけで終わる（必ず次の質問を）
-✗「休息が大切です」のようなアドバイス（求められるまで控えて）
-✗ 選択肢なしの曖昧な質問（「どうでしたか？」）
-✗ 2つ以上の質問を一度に（「いつ？誰と？どこで？」は禁止）
-✗ 会話を終わらせる発言（「いい一日になりますように」「お休みなさい」「ありがとう」等）
-✗ 会話のまとめや振り返り（「まとめると」「今日のお話を振り返ると」等）
-
-【感情への寄り添い方】
-・疲れている様子 →「お疲れ様です。今日は何かあったんですか？」
-・嬉しそう →「いいですね！詳しく聞かせてください」
-・不安そう →「そうですか...。何か気になることがあるんですか？」
-・イライラしている →「それは嫌でしたね。何があったんですか？」`;
+    // フォールバック用の最小指示（通常は ai-prompt.ts の generateSystemInstruction() が使われる）
+    const defaultInstruction = `あなたは日記のための聞き上手なパートナーです。
+相手の一日の出来事や気持ちを引き出してください。
+★最重要：あなたの発話は必ず「質問」で終えてください。質問なしで終わる発話は禁止です。
+丁寧語（です・ます）で話してください。「ユーザー」とは呼ばないでください。
+事務的な応答（「承知しました」）、激励（「応援しています」）、締めくくり（「おやすみなさい」）は禁止です。
+AI自身の状態（「私はいつも通りです」「元気です」など）については一切言及しないでください。あなたは聞き手です。
+システム内部の事情（「内部プロトコルにより」「接続が切れたため」など）は絶対にユーザーに話さないでください。`;
 
     const setupMessage = {
       setup: {
@@ -454,6 +494,12 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
       }
       
       if (message.serverContent.modelTurn) {
+        // AIが自発的に話し始めたら、待機中のリカバリ処理をキャンセル
+        if (this.incompleteResponseTimer) {
+          clearTimeout(this.incompleteResponseTimer);
+          this.incompleteResponseTimer = null;
+        }
+
         const parts = message.serverContent.modelTurn.parts;
         if (parts) {
           for (const part of parts) {
@@ -494,22 +540,29 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
       }
       
       if (message.serverContent.turnComplete) {
+        // ターン内にユーザーの発話（またはノイズ）があったかどうかを判定
+        const hasUserInputInTurn = this.currentUserInput.trim().length > 0;
+        
         // ユーザー入力とAI応答を確定（ここでまとめてログ出力）
         this.finalizeUserInput();
-        this.finalizeAiResponse();
+        this.finalizeAiResponse(hasUserInputInTurn);
         this.turnCount++;
         
         // 5ターンごとに会話継続のリマインダーを送信
         // 長時間会話でシステム指示の効果が薄れるのを防止
+        // ※ 送信タイミングを3秒後に遅延し、AIの前のターンの音声が完全に再生し終わってから送る
+        //   （即座に送ると二重発話の原因になる）
         if (this.turnCount > 0 && this.turnCount % 5 === 0) {
           console.log(`CallSession: Sending continuation reminder (turn ${this.turnCount})`);
-          // 少し遅延して送信（turnCompleteイベント処理後）
           setTimeout(() => {
-            this.sendText(
-              '（システムリマインダー：会話を終わらせないでください。「お疲れ様」「良かったですね」「また」「ありがとう」などで終わらせないでください。必ず次の質問をしてください。話題が尽きたら別の話題に切り替えてください。）',
-              false  // 履歴には記録しない
-            );
-          }, 100);
+            // 送信前にまだ接続中かチェック
+            if (this.isReady()) {
+              this.sendText(
+                '（リマインダー：返答は2〜3文まで。共感1文 ＋ 質問1文が理想。長い返答は禁止。会話を終わらせず、必ず質問で終えること。）',
+                false
+              );
+            }
+          }, 3000);
         }
         
         this.emit('turnComplete');
@@ -524,5 +577,10 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
     }
     this.setupComplete = false;
     this.isInterrupted = false;
+    
+    if (this.incompleteResponseTimer) {
+      clearTimeout(this.incompleteResponseTimer);
+      this.incompleteResponseTimer = null;
+    }
   }
 }

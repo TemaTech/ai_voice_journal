@@ -302,7 +302,7 @@ export default function InsightsScreen() {
                                                         </View>
                                                     </View>
 
-                                                    <ZenHeading level={4} className="text-lg font-bold mb-2" style={{ color: isDark ? '#F1F5F9' : '#1E293B' }}>
+                                                    <ZenHeading level={3} className="text-lg font-bold mb-2" style={{ color: isDark ? '#F1F5F9' : '#1E293B' }}>
                                                         {entry.title}
                                                     </ZenHeading>
 

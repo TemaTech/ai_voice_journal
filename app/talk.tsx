@@ -35,6 +35,9 @@ export default function TalkScreen() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
   // 通話セッション（中核フック）
+  // systemInstruction はオンボーディング時のみ指定。
+  // 通常使用時は undefined を渡し、useCallSession 内で generateSystemInstruction() が
+  // パーソナリティ・ユーザー名・コンテキストを統合したプロンプトを動的生成する。
   const systemInstruction = isOnboarding 
     ? `あなたは新しい友達になるAIジャーナルです。
 初めてお会いするので、自然に挨拶してください。
@@ -49,7 +52,7 @@ export default function TalkScreen() {
 
 お名前を聞いたら、「いいお名前ですね」と軽く反応して、普通の会話を続けてください。
 その後は「今日はどんな1日でしたか？良いことがありましたか？それとも大変でしたか？」のように選択肢を出して聞いてください。`
-    : undefined;
+    : undefined; // 通常時は generateSystemInstruction() に委譲
 
   const {
     callState,

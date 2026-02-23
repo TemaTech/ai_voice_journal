@@ -9,6 +9,7 @@ import { Alert, ScrollView, Switch, TouchableOpacity, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BentoCard } from '../../components/ui/BentoCard';
 import { ZenHeading, ZenText } from '../../components/ui/Typography';
+import { AIPersonality, PERSONALITIES } from '../../constants/personalities';
 import { THEME_COLORS, ThemeColor } from '../../context/ThemeContext';
 import { useTheme } from '../../hooks/useTheme';
 import { NotificationService } from '../../services/notification';
@@ -320,6 +321,38 @@ export default function SettingsScreen() {
                     })}
                   </View>
                   <ZenText className="text-slate-400 text-xs mt-3">次回の会話から反映されます</ZenText>
+               </BentoCard>
+
+               {/* AI Personality Selection */}
+               <BentoCard style={{ backgroundColor: isDark ? 'rgba(30,41,59,0.6)' : 'rgba(255,255,255,0.6)', height: 'auto', padding: 16 }}>
+                  <ZenHeading level={3} className="mb-4 text-xs font-bold uppercase tracking-widest" style={{ color: isDark ? '#94A3B8' : '#64748B' }}>AIの性格</ZenHeading>
+                  <View className="gap-3">
+                    {(Object.entries(PERSONALITIES) as [AIPersonality, typeof PERSONALITIES[AIPersonality]][]).map(([key, { label, description }]) => {
+                      const isSelected = (settings?.aiPersonality || 'empathetic') === key;
+                      return (
+                        <TouchableOpacity
+                          key={key}
+                          onPress={async () => {
+                            await StorageService.saveUserSettings({ aiPersonality: key });
+                            StorageService.getUserSettings().then(setSettings);
+                          }}
+                          className="p-3 rounded-xl border flex-row items-center gap-3"
+                          style={{ 
+                            backgroundColor: isSelected ? (isDark ? 'rgba(79, 70, 229, 0.2)' : '#EEF2FF') : (isDark ? 'rgba(255,255,255,0.05)' : '#FFFFFF'),
+                            borderColor: isSelected ? activeColors.primary : (isDark ? '#334155' : '#E2E8F0')
+                          }}
+                        >
+                          <View className="w-5 h-5 rounded-full border items-center justify-center" style={{ borderColor: isSelected ? activeColors.primary : (isDark ? '#94A3B8' : '#CBD5E1') }}>
+                            {isSelected && <View className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: activeColors.primary }} />}
+                          </View>
+                          <View className="flex-1">
+                            <ZenText className="font-bold text-sm mb-0.5" style={{ color: isSelected ? activeColors.primary : (isDark ? '#E2E8F0' : '#1E293B') }}>{label}</ZenText>
+                            <ZenText className="text-xs leading-4" style={{ color: isDark ? '#94A3B8' : '#64748B' }}>{description}</ZenText>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
                </BentoCard>
 
                {/* Data Management */}

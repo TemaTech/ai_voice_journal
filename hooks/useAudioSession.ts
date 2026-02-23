@@ -21,7 +21,7 @@ export const useAudioSession = () => {
         // ※iOSでは VoiceProcessing モードだと強制的にレシーバーになる場合があるが、
         // expo-avの設定で改善するか試みる。
         await ExpoAudio.setAudioModeAsync({
-          allowsRecordingIOS: true,
+          allowsRecordingIOS: false, // 録音権限はExpoPlayAudioStream(VoiceProcessing)に委譲
           playsInSilentModeIOS: true,
           staysActiveInBackground: true,
           // interruptionModeIOS: InterruptionModeIOS.DoNotMix,
@@ -33,10 +33,10 @@ export const useAudioSession = () => {
         // AEC（エコーキャンセル）のために必要
         await ExpoPlayAudioStream.setSoundConfig({
           sampleRate: 24000 as any,
-          playbackMode: 'voiceProcessing',
+          playbackMode: 'conversation',
         });
 
-        console.log('AudioSession: Setup complete (voiceProcessing mode + expo-av config)');
+        console.log('AudioSession: Setup complete (conversation mode + expo-av config)');
         setIsReady(true);
       } catch (error) {
         console.error('AudioSession: Setup failed', error);

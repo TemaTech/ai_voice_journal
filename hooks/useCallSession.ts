@@ -15,6 +15,58 @@ import { useSimpleAudioPlayer } from './useSimpleAudioPlayer';
 const LIGHT_SILENCE_TIMEOUT_MS = 15000;  // 15秒で軽い合いの手（ユーザーが考える時間を確保）
 const DEEP_SILENCE_TIMEOUT_MS = 30000;   // 30秒で問いかけ
 
+// 挨拶のバリエーション定義
+const GREETINGS = {
+  morning: [ // 5:00 - 10:59
+    'おはようございます。よく眠れましたか？',
+    'おはようございます。今日の予定は何かありますか？',
+    'おはようございます。朝の気分はいかがですか？',
+    'おはようございます。素敵な1日の始まりですね。',
+  ],
+  daytime: [ // 11:00 - 17:59
+    'こんにちは。調子はいかがですか？',
+    'こんにちは。午後の気分はどうですか？',
+    'こんにちは。ここまでどんな1日でしたか？',
+    'こんにちは。何か良いことはありましたか？',
+  ],
+  evening: [ // 18:00 - 22:59
+    'お疲れ様です。今日はどんな1日でしたか？',
+    'こんばんは。今日一日を振り返ってみませんか？',
+    'こんばんは。何か印象に残った出来事はありましたか？',
+    'お疲れ様です。少しゆっくりお話しましょうか。',
+  ],
+  night: [ // 23:00 - 4:59
+    'こんな時間にこんばんは。眠れませんか？',
+    '静かな夜ですね。何か考え事ですか？',
+    'こんばんは。今日の日記をつけて休みましょうか。',
+    '夜遅くにお疲れ様です。どんなことを考えていましたか？',
+  ],
+  generic: [ // 時間帯問わず混ぜる
+    'こんにちは。今、どんなことを考えていますか？',
+    'お話相手になりますよ。何でも話してください。',
+    'こんにちは。今の気持ちを教えていただけますか？',
+  ]
+};
+
+const getInitialGreeting = (): string => {
+  const hour = new Date().getHours();
+  let candidates: string[] = [...GREETINGS.generic];
+
+  if (hour >= 5 && hour < 11) {
+    candidates = [...candidates, ...GREETINGS.morning];
+  } else if (hour >= 11 && hour < 18) {
+    candidates = [...candidates, ...GREETINGS.daytime];
+  } else if (hour >= 18 && hour < 23) {
+    candidates = [...candidates, ...GREETINGS.evening];
+  } else {
+    candidates = [...candidates, ...GREETINGS.night];
+  }
+
+  // ランダムに選択
+  const randomIndex = Math.floor(Math.random() * candidates.length);
+  return candidates[randomIndex];
+};
+
 interface UseCallSessionReturn extends CallSessionState {
   // アクション
   connect: () => void;
@@ -46,6 +98,14 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
   const lightSilenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deepSilenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // 会話ログのRef（doConnect内での参照用）
+  const conversationLogsRef = useRef<ConversationLog[]>([]);
+  
+  // ログ更新時にRefも更新
+  useEffect(() => {
+    conversationLogsRef.current = conversationLogs;
+  }, [conversationLogs]);
+
   const callStateRef = useRef<CallState>(CallState.ENDED);
   const isTurnCompletingRef = useRef<boolean>(false); // ターン完了処理中フラグ（競合回避用）
   const isInterruptingRef = useRef<boolean>(false); // 割り込み処理中フラグ（二重割り込み防止）
@@ -56,6 +116,10 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
   // Audio Session（権限・設定）
   const { isReady: isAudioReady } = useAudioSession();
   
+  const isUserDisconnectingRef = useRef<boolean>(false);
+  const retryCountRef = useRef<number>(0);
+  const MAX_RETRIES = 100; // 10分制限・長時間会話対策として、リトライ上限を実質撤廃
+
   // 状態変更（Refも同時に更新）
   const updateCallState = useCallback((newState: CallState) => {
     const prevState = callStateRef.current;
@@ -85,6 +149,12 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
     
     // 軽い合いの手
     lightSilenceTimerRef.current = setTimeout(() => {
+      // AIが既に話している場合はスキップ（二重発話防止）
+      const currentState = callStateRef.current;
+      if (currentState === CallState.AI_TALKING || currentState === CallState.AI_THINKING) {
+        console.log('CallSession: Light silence skipped (AI is talking/thinking)');
+        return;
+      }
       console.log('CallSession: Light silence timeout - sending light prompt');
       if (geminiServiceRef.current?.isReady()) {
         geminiServiceRef.current.sendLightSilencePrompt();
@@ -94,6 +164,12 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
     
     // 深い問いかけ
     deepSilenceTimerRef.current = setTimeout(() => {
+      // AIが既に話している場合はスキップ（二重発話防止）
+      const currentState = callStateRef.current;
+      if (currentState === CallState.AI_TALKING || currentState === CallState.AI_THINKING) {
+        console.log('CallSession: Deep silence skipped (AI is talking/thinking)');
+        return;
+      }
       console.log('CallSession: Deep silence timeout - sending deep prompt');
       if (geminiServiceRef.current?.isReady()) {
         geminiServiceRef.current.sendDeepSilencePrompt();
@@ -125,16 +201,18 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
         isInterruptingRef.current = true;
         
         // Turn complete処理中の場合もリセット
-        // （Turn completeと割り込みが重なると、isTurnCompletingRefが
-        //  1.2秒間trueのまま残り、新しいaudioイベントをブロックしてしまう）
         isTurnCompletingRef.current = false;
         
         console.log('CallSession: Interrupting AI');
         geminiServiceRef.current?.sendInterrupt();
+        
+        // ★ 割り込み時に音声送信を即座に一時停止
+        // マイクの残響/ノイズがGeminiに送信され、
+        // 誤った「承知しました」応答の原因になるのを防ぐ
+        geminiServiceRef.current?.pauseAudioSending();
+        
         updateCallState(CallState.INTERRUPTED);
         
-        // interruptAI()をtry-catchでラップし、失敗してもアプリがクラッシュしないようにする
-        // 非同期処理完了後に状態を遷移することで、ネイティブ側の処理と状態の整合性を保つ
         (async () => {
           try {
             await audioPlayerRef.current?.interruptAI();
@@ -142,12 +220,16 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
             console.error('CallSession: interruptAI failed', e);
           } finally {
             isInterruptingRef.current = false;
-            // 割り込み完了後にUSER_TALKINGへ遷移
-            // （ENDEDに変わっていないことを確認）
             const stateAfterInterrupt = callStateRef.current;
             if (stateAfterInterrupt !== CallState.ENDED) {
               updateCallState(CallState.USER_TALKING);
             }
+            
+            // ★ 500ms後に音声送信を再開
+            // 割り込み直後のマイク残響が落ち着いてからユーザー音声を送信
+            setTimeout(() => {
+              geminiServiceRef.current?.resumeAudioSending();
+            }, 500);
           }
         })();
       } else {
@@ -159,10 +241,10 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
       updateCallState(CallState.LISTENING);
       startSilenceTimer();
     },
-    // VAD設定（誤検出を減らすため閾値を高めに設定）
-    speechThreshold: 0.08,    // 0.05 → 0.08 発話検出閾値をさらに上げる
+    // VAD設定（誤検出を減らすため閾値をさらに高めに設定）
+    speechThreshold: 0.2,     // 0.08 → 0.2 誤検出防止のため大幅に上げる
     silenceThreshold: 0.02,   // 無音閾値は維持
-    speechDebounceMs: 300,    // 200 → 300 発話開始までの待機時間をさらに延長
+    speechDebounceMs: 400,    // 300 → 400 ノイズによる誤反応を防ぐ
     silenceDebounceMs: 500,   // 発話終了判定は維持
   });
   
@@ -170,22 +252,25 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
   audioPlayerRef.current = audioPlayer;
 
   // 実際の接続処理
-  const doConnect = useCallback(async () => {
+  const doConnect = useCallback(async (isRetry = false) => {
     if (!isAudioReady) {
       console.log('CallSession: Audio not ready, setting pendingConnect');
       setPendingConnect(true);
       return;
     }
     
-    if (geminiServiceRef.current?.isReady()) {
+    if (geminiServiceRef.current?.isReady() && !isRetry) {
       console.log('CallSession: Already connected');
       return;
     }
 
-    console.log('CallSession: Connecting...');
-    updateCallState(CallState.CONNECTING);
-    setErrorMessage(null);
-    setPendingConnect(false);
+    console.log(`CallSession: Connecting... (Retry: ${retryCountRef.current})`);
+    if (!isRetry) {
+        updateCallState(CallState.CONNECTING);
+        setErrorMessage(null);
+        setPendingConnect(false);
+        isUserDisconnectingRef.current = false; // 接続開始時にフラグをリセット
+    }
 
     const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY || '';
     if (!apiKey) {
@@ -207,37 +292,73 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
     service.on('connected', () => {
       console.log('CallSession: Connected to Gemini, starting recording...');
       updateCallState(CallState.LISTENING);
+      retryCountRef.current = 0; // 接続成功でリセット
       
       // 録音開始
       audioPlayerRef.current?.startRecording();
       
-      // 最初のAI挨拶をトリガー（話しやすいきっかけを作る）
-      setTimeout(() => {
-        console.log('CallSession: Sending initial greeting...');
-        // 選択肢を出して話しやすくする（敬語統一）
-        service.sendText('こんにちは！今日はどんな1日でしたか？良いことがありましたか？それとも大変でしたか？', false);
-        updateCallState(CallState.AI_THINKING);
-      }, 1000);
+      // 最初のAI挨拶をトリガー（リトライ時は挨拶しない）
+      if (!isRetry) {
+        setTimeout(() => {
+          console.log('CallSession: Sending initial greeting...');
+          // 短い挨拶でユーザーに話しやすい気持ちにさせる
+          // 注: ここで普通の挨拶を送ると、AIが「ユーザーからの問いかけ」と解釈して「私は元気ですよ」などと返してしまうため、
+          // 明確に「指示」として送信する。
+          const greeting = getInitialGreeting();
+          console.log('CallSession: Selected greeting:', greeting);
+          service.sendText(`（指示：ユーザーに対し「${greeting}」と話しかけてください。あなた自身の状態（「私はいつも通りです」など）については一切言及しないでください）`, false);
+          updateCallState(CallState.AI_THINKING);
+        }, 1000);
+      }
     });
 
     service.on('disconnected', () => {
-      console.log('CallSession: Disconnected');
+      console.log('CallSession: Disconnected event received');
+      
+      // ユーザーによる切断でなければ再接続を試みる
+      if (!isUserDisconnectingRef.current) {
+          if (retryCountRef.current < MAX_RETRIES) {
+              console.log(`CallSession: Unexpected disconnect. Retrying... (${retryCountRef.current + 1}/${MAX_RETRIES})`);
+              retryCountRef.current += 1;
+              setTimeout(() => {
+                  doConnect(true);
+              }, 2000);
+              return;
+          } else {
+              console.error('CallSession: Max retries reached. Giving up.');
+              setErrorMessage('接続が切れました。もう一度お試しください。');
+          }
+      }
+
+      console.log('CallSession: Handling disconnect cleanup');
       updateCallState(CallState.ENDED);
       audioPlayerRef.current?.stopRecording();
       resetSilenceTimer();
     });
 
     service.on('error', (error) => {
-      console.error('CallSession: Error', error);
+      console.error('CallSession: Error event received', error);
+      
+      // エラー時も再接続試行
+      if (!isUserDisconnectingRef.current && retryCountRef.current < MAX_RETRIES) {
+          console.log(`CallSession: Error occurred. Retrying... (${retryCountRef.current + 1}/${MAX_RETRIES})`);
+          retryCountRef.current += 1;
+          setTimeout(() => {
+              doConnect(true);
+          }, 2000);
+          return;
+      }
+
       setErrorMessage('接続エラーが発生しました');
       onError?.(error);
     });
 
     service.on('audio', (base64Audio) => {
-      // ターン完了処理中は新しい音声イベントを無視（前のターンの残りとみなす）
-      if (isTurnCompletingRef.current) {
-        return;
-      }
+      // ターン完了処理中であっても、サーバーから送られてくるAIの音声データは正当なものとして再生を許可する
+      // （リカバリ発話などがこのタイミングで届く可能性があるため）
+      // if (isTurnCompletingRef.current) {
+      //   return;
+      // }
       
       // 割り込み処理中も新しい音声イベントを無視
       // （ネイティブのstopPlaying完了前に到着した残りチャンクをブロック）
@@ -284,29 +405,26 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
       console.log('CallSession: Turn complete');
       isTurnCompletingRef.current = true;
       
-      // 音声送信を一時停止（残響が次のターンとして誤認識されるのを防ぐ）
-      geminiServiceRef.current?.pauseAudioSending();
+      // ★ 音声送信の一時停止は行わない。
+      // Gemini APIはクライアント側の無音を「ユーザーの発話終了」と解釈するため、
+      // pauseAudioSending() でマイク入力を止めると、予期しないturnCompleteの連鎖を
+      // 引き起こすリスクがある。エコー防止はVADガード（推定再生時間ベース）で対応。
       
       audioPlayerRef.current?.onTurnComplete();
       
       // 沈黙カウンターをリセット
       geminiServiceRef.current?.resetSilenceCount();
       
-      // AI発話完了 -> LISTENINGへ（500ms -> 200msに短縮して応答性を向上）
+      // AI音声の再生完了を待ってからLISTENINGへ遷移し沈黙タイマーを開始
       setTimeout(() => {
+        isTurnCompletingRef.current = false;
+        
         const currentState = callStateRef.current;
         if (currentState !== CallState.ENDED && currentState !== CallState.USER_TALKING) {
           updateCallState(CallState.LISTENING);
           startSilenceTimer();
         }
-        
-        // 状態遷移完了後にフラグ解除と音声送信再開（少しバッファを持たせる）
-        setTimeout(() => {
-          isTurnCompletingRef.current = false;
-          geminiServiceRef.current?.resumeAudioSending();
-        }, 1000); // 1秒間は残響による誤検知を完全にブロック
-        
-      }, 200);
+      }, 800); // 音声再生完了を待つ
     });
 
     service.on('interrupted', () => {
@@ -328,8 +446,18 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
         console.error('CallSession: Failed to generate instruction', e);
       }
     }
+
     
-    service.connect(instructionToUse);
+    // 再接続時（または初回接続時も）、これまでの会話履歴を渡してコンテキストを復元
+    // ※ 必要に応じて直近N件に絞るなどの調整も可能だが、
+    // Gemini 1.5 Pro/Flashはコンテキストウィンドウが広いので全件渡しても基本OK。
+    // 日記生成に十分な情報を持たせるため、全件渡す。
+    const history = conversationLogsRef.current;
+    if (history.length > 0) {
+      console.log(`CallSession: Connecting with context (${history.length} logs)`);
+    }
+    
+    service.connect(instructionToUse, history);
 
   }, [isAudioReady, updateCallState, resetSilenceTimer, startSilenceTimer, onError, onConversationLog]);
 
@@ -349,6 +477,7 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
   // 切断
   const disconnect = useCallback(() => {
     console.log('CallSession: Disconnecting...');
+    isUserDisconnectingRef.current = true; // ユーザーによる明示的な切断
     setPendingConnect(false);
     resetSilenceTimer();
     audioPlayerRef.current?.stopRecording();
