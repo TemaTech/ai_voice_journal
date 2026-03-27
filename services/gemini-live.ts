@@ -140,36 +140,7 @@ export class GeminiLiveService extends EventEmitter<GeminiLiveEvents> {
       if (!isShortEnglish) {
         this.recordAiMessage(this.currentAiResponse);
         console.log('[AI発話]', this.currentAiResponse.substring(0, 100) + (this.currentAiResponse.length > 100 ? '...' : ''));
-
-        // ★ 途切れ検知ロジック
-        // 文末が句読点や記号で終わっていない場合、「途切れ」とみなす
-        const lastChar = this.currentAiResponse.trim().slice(-1);
-        const validEndings = ['。', '、', '？', '！', '!', '?', '」', ')', '）', '\n'];
-        const isComplete = validEndings.includes(lastChar);
-        
-          if (!isComplete) {
-            if (wasInterruptedByUser) {
-              console.log(`GeminiLive: Incomplete response but user input detected in turn. Skipping recovery.`);
-              // リカバリーせずに終了（ユーザー発話やノイズで中断された場合は、次の展開に委ねる）
-            } else if (this.recoveryAttemptCount < GeminiLiveService.MAX_RECOVERY_ATTEMPTS) {
-              this.recoveryAttemptCount++;
-              console.log(`GeminiLive: Incomplete response detected (Last char: ${lastChar}). Recovery attempt ${this.recoveryAttemptCount}/${GeminiLiveService.MAX_RECOVERY_ATTEMPTS}`);
-              
-              if (this.incompleteResponseTimer) {
-                clearTimeout(this.incompleteResponseTimer);
-              }
-              
-              this.incompleteResponseTimer = setTimeout(() => {
-                 if (this.isReady()) {
-                   // 短い応答を促すシンプルなプロンプト
-                   this.sendText('（指示：途切れました。短く一文で続きを話してください）', false);
-                 }
-                 this.incompleteResponseTimer = null;
-              }, 1000); // 1秒後にリカバリ（シームレスな繋がりのため短めに）
-            } else {
-              console.log('GeminiLive: Incomplete response detected but max recovery attempts reached. Skipping recovery.');
-            }
-          }
+        // ★ 途切れリカバリーは撤廃（Barge-inが有効になったため、ユーザーが自然に会話を進められる）
       } else {
         console.log('[AI発話(無視)]', this.currentAiResponse);
       }
@@ -273,9 +244,12 @@ AI自身の状態（「私はいつも通りです」「元気です」など）
 
     const setupMessage = {
       setup: {
-        model: this.config.model || "models/gemini-2.5-flash-native-audio-preview-12-2025",
+        model: this.config.model || "models/gemini-3.1-flash-live-preview",
+        historyConfig: {
+          initialHistoryInClientContent: true  // 会話履歴の復元を許可
+        },
         generationConfig: {
-          responseModalities: ["AUDIO"],  // TEXT+AUDIOはサポート外、AUDIOのみ使用
+          responseModalities: ["AUDIO"],  
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: {
@@ -283,22 +257,14 @@ AI自身の状態（「私はいつも通りです」「元気です」など）
               }
             }
           },
-          // 思考モードを無効化（Live APIで不安定になるため）
           thinkingConfig: {
             thinkingBudget: 0
           }
         },
-        // ユーザー音声のテキスト化を有効化（日記生成用）
         inputAudioTranscription: {},
-        // AI音声のテキスト化を有効化（ログ・日記生成用）
         outputAudioTranscription: {},
-        // System instructions for the AI character
         systemInstruction: {
-          parts: [
-            {
-              text: instruction || defaultInstruction
-            }
-          ]
+          parts: [{ text: instruction || defaultInstruction }]
         }
       }
     };
@@ -323,14 +289,13 @@ AI自身の状態（「私はいつも通りです」「元気です」など）
 
     this.audioChunkCount++;
 
-    // Gemini Live API正式フォーマット
-    // 参考: https://ai.google.dev/api/multimodal-live
+    // Gemini 3.1 Live API 正式フォーマット
     const message = {
       realtimeInput: {
-        mediaChunks: [{
+        audio: {
           mimeType: "audio/pcm;rate=16000",
           data: base64Audio
-        }]
+        }
       }
     };
 
@@ -351,15 +316,10 @@ AI自身の状態（「私はいつも通りです」「元気です」など）
       return;  // セットアップ完了前
     }
 
+    // Gemini 3.1 では継続的なテキスト入力は realtimeInput を使用
     const message = {
-      clientContent: {
-        turns: [
-          {
-            role: "user",
-            parts: [{ text: text }]
-          }
-        ],
-        turnComplete: true
+      realtimeInput: {
+        text: text
       }
     };
 
@@ -552,7 +512,7 @@ AI自身の状態（「私はいつも通りです」「元気です」など）
         // 長時間会話でシステム指示の効果が薄れるのを防止
         // ※ 送信タイミングを3秒後に遅延し、AIの前のターンの音声が完全に再生し終わってから送る
         //   （即座に送ると二重発話の原因になる）
-        if (this.turnCount > 0 && this.turnCount % 5 === 0) {
+        if (this.turnCount > 0 && this.turnCount % 10 === 0) {
           console.log(`CallSession: Sending continuation reminder (turn ${this.turnCount})`);
           setTimeout(() => {
             // 送信前にまだ接続中かチェック

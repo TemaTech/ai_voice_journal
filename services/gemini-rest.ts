@@ -1,7 +1,7 @@
 // services/gemini-rest.ts
 // Gemini REST APIを使用したテキストベースの日記要約生成
 
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent';
 
 interface JournalData {
   title: string;

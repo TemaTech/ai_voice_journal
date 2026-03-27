@@ -114,27 +114,22 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
 
   // VAD処理
   const processVAD = useCallback((base64Audio: string) => {
-    // AI発話中はVADをスキップ（エコーバック誤検出防止）
-    if (pendingChunksRef.current > 0 || isAiPlayingRef.current) {
-      return;
-    }
-
-    // 再生終了直後もVADをスキップ（残響・テイルエコー・レイテンシー対策）
-    // バイト数から計算した厳密な終了予定時刻 + マージン(500ms)でガード
+    // ★ 改善: AI発話中もVADを動作させる（フルデュプレックス化）
+    // ただし、AECの残留エコーによる誤検出を防ぐため、閾値を動的に引き上げる
+    const isAiCurrentlyPlaying = pendingChunksRef.current > 0 || isAiPlayingRef.current;
     const now = Date.now();
-    if (now < estimatedPlaybackEndTimeRef.current + 500) {
-      return;
-    }
+    // 再生終了直後のガード（残響対策） - マージンを500ms→300msに短縮
+    const isInPostPlaybackGuard = now < estimatedPlaybackEndTimeRef.current + 300
+                                || now - lastPlaybackTimeRef.current < 500;
 
-    // フォールバック: 従来の時間ベースガード (念のため残すが、上記でほぼカバーされるはず)
-    if (now - lastPlaybackTimeRef.current < 800) {
-       return;
-    }
-    
-    // ... (rest of processVAD)
+    // AI発話中 or 再生直後は、閾値を大幅に引き上げることで
+    // エコーバック（AECの残留）を無視しつつ、ユーザーの明確な声は検出する
+    const dynamicSpeechThreshold = (isAiCurrentlyPlaying || isInPostPlaybackGuard)
+      ? 0.5  // AI発話中: 非常に高い閾値（確実にユーザーが話していると判断できる音量のみ）
+      : speechThreshold; // 通常時: 設定値
 
     const level = calculateAudioLevel(base64Audio);
-    const isSpeakingNow = level > speechThreshold;
+    const isSpeakingNow = level > dynamicSpeechThreshold;
     const isSilentNow = level < silenceThreshold;
     
     if (isSpeakingNow && !wasSpeakingRef.current) {
@@ -248,9 +243,9 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
         return;
       }
 
-      // 推定再生時間の更新
+      // 推定再生時間の更新（24kHz 16bit Mono = 48,000 bytes/sec）
       const byteSize = base64Audio.length * 0.75;
-      const durationMs = (byteSize / 32000) * 1000; // 16kHz換算（安全マージン）
+      const durationMs = (byteSize / 48000) * 1000;
       estimatedPlaybackEndTimeRef.current = Math.max(Date.now(), estimatedPlaybackEndTimeRef.current) + durationMs;
 
       // ネイティブのplaySoundを直接呼び出し
@@ -583,7 +578,7 @@ export const useSimpleAudioPlayer = (options: UseSimpleAudioPlayerOptions) => {
       turnInitializedRef.current = false;
       engineConfigPromiseRef.current = null;
       turnCompleteTimerRef.current = null;
-    }, 500);
+    }, 200); // 500→200: ネイティブキューのフラッシュに必要な最小限の待ち時間
   }, []);
 
   // 新しいターンを開始

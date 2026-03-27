@@ -225,11 +225,11 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
               updateCallState(CallState.USER_TALKING);
             }
             
-            // ★ 500ms後に音声送信を再開
-            // 割り込み直後のマイク残響が落ち着いてからユーザー音声を送信
+            // ★ 200ms後に音声送信を再開
+            // AECが有効なため、残響ガードを最小限に短縮
             setTimeout(() => {
               geminiServiceRef.current?.resumeAudioSending();
-            }, 500);
+            }, 200);
           }
         })();
       } else {
@@ -241,11 +241,11 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
       updateCallState(CallState.LISTENING);
       startSilenceTimer();
     },
-    // VAD設定（誤検出を減らすため閾値をさらに高めに設定）
-    speechThreshold: 0.2,     // 0.08 → 0.2 誤検出防止のため大幅に上げる
+    // VAD設定（AECが有効なため、閾値とデバウンスを最適化）
+    speechThreshold: 0.12,    // 0.2 → 0.12 AECにより誤検出リスクが低下したため、感度を上げる
     silenceThreshold: 0.02,   // 無音閾値は維持
-    speechDebounceMs: 400,    // 300 → 400 ノイズによる誤反応を防ぐ
-    silenceDebounceMs: 500,   // 発話終了判定は維持
+    speechDebounceMs: 200,    // 400 → 200 レスポンス向上（AECでノイズ軽減済み）
+    silenceDebounceMs: 400,   // 500 → 400 発話終了検出を少し早める
   });
   
   // audioPlayerをRefに保存（循環参照回避用）
@@ -424,7 +424,7 @@ export const useCallSession = (config: CallSessionConfig = {}): UseCallSessionRe
           updateCallState(CallState.LISTENING);
           startSilenceTimer();
         }
-      }, 800); // 音声再生完了を待つ
+      }, 300); // 音声再生完了を待つ（800→300: VADのフルデュプレックス化により短縮可能）
     });
 
     service.on('interrupted', () => {
